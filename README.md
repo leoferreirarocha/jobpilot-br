@@ -2,7 +2,7 @@
 
 Assistente local em Python para buscar, classificar e candidatar-se a vagas com **Candidatura simplificada** no LinkedIn. Aceita vagas presenciais/híbridas em Curitiba e remotas no Brasil. Inclui buscas de desenvolvimento, QA, suporte e funções de entrada mais amplas.
 
-**Estado:** versão com recuperação de falhas por anúncio. Em 5 de novembro de 2026, os quatro anúncios envolvidos na falha do agendamento foram lidos corretamente após a correção. Há 45 testes de regras, formulários e recuperação de falhas. O funcionamento continua dependendo da sessão e do layout atual da conta; não há garantia de envio em todo formulário nem de atingir a cota diária.
+**Estado:** versão com recuperação de falhas por anúncio. Em 5 de novembro de 2026, os quatro anúncios envolvidos na falha do agendamento foram lidos corretamente após a correção. Há 46 testes de regras, formulários e recuperação de falhas. O funcionamento continua dependendo da sessão e do layout atual da conta; não há garantia de envio em todo formulário nem de atingir a cota diária.
 
 O LinkedIn [proíbe automação por terceiros](https://www.linkedin.com/help/linkedin/answer/a1341543) e pode restringir contas. [Há limites diários e por velocidade](https://www.linkedin.com/help/linkedin/answer/a8068422), sem número universal publicado. A rotina para diante de limite, CAPTCHA ou verificação de segurança; não usa stealth, proxies, rotação de contas, resolução de CAPTCHA ou tentativa de contornar bloqueios.
 

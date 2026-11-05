@@ -274,6 +274,12 @@ class ResilienceTests(unittest.TestCase):
         self.assertEqual(jobpilot.fill_step(dialog,self.config,self.resume),[])
         self.assertEqual(dialog.locator('input').input_value(),"candidate@example.com")
 
+    def test_english_limit_inside_shadow_dialog_stops_globally(self):
+        self.page.set_content('<div id=host></div>')
+        self.page.evaluate('''() => document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<div role=dialog>You’ve reached today’s Easy Apply limit.</div>' ''')
+        with self.assertRaises(jobpilot.StopRun):
+            jobpilot.guard(self.page)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -128,10 +128,10 @@ def guard(page):
         raise StopRun("Sessao ausente ou expirada. Abra Entrar-LinkedIn.cmd.")
     text = norm(page.locator("body").inner_text(timeout=10000))
     limits = ["reached today's easy apply limit", "reached your daily", "daily application limit",
-              "daily easy apply limit", "atingiu o limite de candidaturas", "limite diario de candidaturas", "limite de candidaturas simplificadas",
+              "daily easy apply limit", "easy apply limit", "atingiu o limite de candidaturas", "limite diario de candidaturas", "limite de candidaturas simplificadas",
               "applying too quickly", "too many applications", "temporary pause on easy apply"]
     notices = norm(" ".join(page.locator('[role="alert"], [role="dialog"], .artdeco-toast-item').all_inner_texts()))
-    if any(value in text for value in limits) or (re.search(r"candidat|appl", notices) and any(value in notices for value in ["atingiu o limite", "limite diario", "temporarily paused", "try again tomorrow", "tente novamente amanha", "muitas candidaturas", "muito rapido"])):
+    if any(value in text + " " + notices for value in limits) or (re.search(r"candidat|appl", notices) and any(value in notices for value in ["atingiu o limite", "limite diario", "temporarily paused", "try again tomorrow", "tente novamente amanha", "muitas candidaturas", "muito rapido"])):
         raise StopRun("Limite ou pausa do LinkedIn detectado; nenhuma nova tentativa hoje (UTC).")
     for challenge in page.locator('iframe[src*="captcha"], iframe[title*="reCAPTCHA"], #captcha-internal').all():
         if challenge.is_visible():
