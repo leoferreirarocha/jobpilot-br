@@ -267,6 +267,13 @@ class ResilienceTests(unittest.TestCase):
         self.page.set_content('<section><h2>Sobre a vaga</h2><h2>Status da candidatura</h2><p>Candidatura enviada</p></section>')
         self.assertFalse(self.page.evaluate(jobpilot.STATUS_CONFIRMATION_JS))
 
+    def test_field_label_is_resolved_inside_shadow_dom(self):
+        self.page.set_content('<div id=host></div>')
+        self.page.evaluate('''() => document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<div role=dialog><span id=email-label>Email address</span><input aria-labelledby=email-label type=email></div>' ''')
+        dialog=self.page.get_by_role("dialog")
+        self.assertEqual(jobpilot.fill_step(dialog,self.config,self.resume),[])
+        self.assertEqual(dialog.locator('input').input_value(),"candidate@example.com")
+
 
 if __name__ == "__main__":
     unittest.main()

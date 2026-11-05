@@ -279,12 +279,13 @@ def parse_job(page, job_id):
 def label_of(field):
     return field.evaluate(r"""el => {
       const ids=(el.getAttribute('aria-labelledby')||'').split(/\s+/);
+      const root=el.getRootNode();
       const labels=el.labels ? [...el.labels].map(x=>{
         const copy=x.cloneNode(true);
         copy.querySelectorAll('input,select,textarea,button').forEach(child=>child.remove());
         return copy.textContent;
       }).join(' ').trim() : '';
-      return labels || el.getAttribute('aria-label') || ids.map(id=>document.getElementById(id)?.innerText||'').join(' ').trim() || '';
+      return labels || el.getAttribute('aria-label') || ids.map(id=>root.getElementById?.(id)?.innerText||'').join(' ').trim() || '';
     }""")
 
 
