@@ -1,0 +1,73 @@
+# JobPilot BR
+
+Assistente local em Python para buscar, classificar e candidatar-se a vagas com **Candidatura simplificada** no LinkedIn. Aceita vagas presenciais/híbridas em Curitiba e remotas no Brasil. Inclui buscas de desenvolvimento, QA, suporte e funções de entrada mais amplas.
+
+**Estado:** protótipo. As regras e os formulários são testados em páginas locais simuladas; o funcionamento no LinkedIn depende da sessão e do layout atual da conta. Não há garantia de envio nem de atingir a cota diária.
+
+O LinkedIn [proíbe automação por terceiros](https://www.linkedin.com/help/linkedin/answer/a1341543) e pode restringir contas. [Há limites diários e por velocidade](https://www.linkedin.com/help/linkedin/answer/a8068422), sem número universal publicado. A rotina para diante de limite, CAPTCHA ou verificação de segurança; não usa stealth, proxies, rotação de contas, resolução de CAPTCHA ou tentativa de contornar bloqueios.
+
+## Uso no computador já configurado
+
+1. Abra `Entrar-LinkedIn.cmd` e faça o login pessoalmente na janela do Edge. O programa não solicita nem registra sua senha. O perfil separado do navegador mantém a sessão em `data/browser-profile/`; mantenha essa pasta privada.
+2. Abra `Verificar-Vagas.cmd` para buscar e ordenar sem enviar candidaturas. Consulte `data/ranked-jobs.json` e `data/last-run.json`.
+3. Abra `Candidatar.cmd` para enviar as candidaturas que o programa conseguir preencher apenas com dados confirmados.
+
+A configuração pessoal fica em `config.local.json`, ignorada pelo Git. O agendamento diário, quando ativado pelo Codex, executa `Executar.ps1 -Mode run` às **17h de America/Sao_Paulo**. O computador precisa estar ligado, conectado à internet e com o aplicativo Codex aberto. A rotina não roda no GitHub Actions e não depende de plugin do GitHub ou API paga.
+
+## Instalação a partir do GitHub
+
+Requer Windows, Python 3.12+ e Microsoft Edge instalado. No PowerShell, dentro da pasta do projeto:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item config.example.json config.local.json
+New-Item -ItemType Directory -Force resumes
+```
+
+Coloque seus dois PDFs em `resumes/` e edite `config.local.json`. Verifique os caminhos dos PDFs e seus contatos antes do primeiro envio.
+
+```powershell
+.\.venv\Scripts\python.exe jobpilot.py check
+.\.venv\Scripts\python.exe jobpilot.py login
+.\.venv\Scripts\python.exe jobpilot.py plan
+.\.venv\Scripts\python.exe jobpilot.py run
+```
+
+## Como escolhe as vagas
+
+As buscas usam os filtros do LinkedIn para candidatura simplificada, últimos sete dias e região/modalidade. A rotina confere também a localização e a modalidade visíveis na vaga. Localização ou modalidade sem confirmação ficam de fora.
+
+A ordenação usa regras transparentes: compatibilidade com C#/Unity/Godot, desenvolvimento, QA e suporte; preferência por vagas júnior; penalidade para cargos sênior; bônus limitado para salário mensal em reais publicado e menções a mentoria/treinamento. Os bônus são heurísticas, não estimativas salariais nem garantias de crescimento. Salários ausentes, anuais ou por hora não são comparados. Não consulta salários externos.
+
+O currículo em inglês é escolhido quando a descrição contém predominância de termos ingleses; nos demais casos usa o português. Ambos devem estar atualizados. O currículo nunca é reescrito e suas qualificações nunca são inventadas.
+
+## Formulários e limites
+
+- Preenche somente contatos inequívocos ou perguntas com resposta exata cadastrada em `answers`.
+- Perguntas desconhecidas, inclusive pré-preenchidas pelo site, ficam em `pending` no relatório. Não presume autorização de trabalho, tempo de experiência, formação concluída, disponibilidade, pretensão salarial ou dados demográficos. Checkboxes e radios ficam para revisão pessoal.
+- Para adicionar uma resposta textual ou de seleção, copie o rótulo exato para `answers` em `config.local.json` e informe o valor verdadeiro. Por exemplo: `"Código do país": "Brasil (+55)"`, se essa for a opção exibida. Não use respostas genéricas por palavra-chave.
+- Exige upload identificado como currículo antes do envio. Pedidos de outros documentos ficam para revisão.
+- `max_per_day: null` significa **sem cota artificial local**. Pode definir um inteiro para limitar os envios. O limite real continua sendo o do LinkedIn.
+- `max_candidates`, `max_minutes` e `pages_per_search` limitam o trabalho de uma execução, não representam a cota do LinkedIn. Portanto a execução pode terminar antes de gastar a cota.
+- Um limite ou alerta de segurança pausa o restante do dia UTC. O script não repete tentativas naquela data.
+- Antes de clicar em enviar, registra a tentativa no SQLite. Se a confirmação não aparecer, marca o resultado como incerto e encerra. Essa vaga não será reenviada automaticamente. Verifique a aba de candidaturas do LinkedIn antes de qualquer correção manual no histórico.
+- Uma trava de arquivo impede duas execuções simultâneas com o mesmo perfil.
+
+## Privacidade e relatórios
+
+`config.local.json`, `data/`, `resumes/`, PDFs, logs e `.venv/` são ignorados pelo Git. Não publique esses arquivos. Os relatórios e o banco ficam somente no computador e podem conter perguntas de recrutadores e dados de candidaturas. Não há telemetria ou serviço de IA externo neste programa.
+
+`data/last-run.json` mostra o resultado mais recente; `data/reports/` conserva cada execução; `data/applications.sqlite3` conserva os envios e tentativas incertas para evitar duplicatas.
+
+## Testes
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+Os testes de navegador usam o Edge em páginas HTML simuladas, sem acessar o LinkedIn. Verificam upload, preenchimento de contatos, perguntas desconhecidas, consentimentos, confirmação de envio e cota antes do clique. Os testes de regras cobrem região, modalidade, salário, idioma e histórico persistente.
+
+## Pausar a rotina
+
+Pause a automação na área de agendamentos do Codex. Para remover o login local sem apagar o histórico, use o próprio Edge desse perfil para sair do LinkedIn. Feche esse navegador antes da próxima execução.

@@ -1,0 +1,21 @@
+{
+  "contact": {
+    "first_name": "SEU NOME",
+    "last_name": "SEU SOBRENOME",
+    "email": "seu-email@example.com",
+    "phone": "41999999999",
+    "linkedin": "https://www.linkedin.com/in/seu-perfil/",
+    "github": "https://github.com/seu-usuario",
+    "portfolio": "https://example.com/portfolio"
+  },
+  "resumes": { "pt": "resumes/curriculo.pdf", "en": "resumes/resume.pdf" },
+  "queries": ["C# júnior", ".NET júnior", "Unity", "QA júnior", "suporte técnico", "assistente", "atendimento", ""],
+  "answers": {},
+  "browser_channel": "msedge",
+  "headless": true,
+  "max_per_day": null,
+  "max_candidates": 150,
+  "max_minutes": 60,
+  "seconds_between_applications": 30,
+  "pages_per_search": 1
+}
