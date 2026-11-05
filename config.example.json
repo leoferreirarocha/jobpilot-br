@@ -13,6 +13,7 @@
   "resumes": { "pt": "resumes/curriculo.pdf", "en": "resumes/resume.pdf" },
   "queries": ["C# júnior", ".NET júnior", "Unity", "QA júnior", "suporte técnico", "assistente", "atendimento", ""],
   "answers": {},
+  "reviewed_eligibility_job_ids": [],
   "browser_channel": "msedge",
   "headless": true,
   "max_per_day": null,

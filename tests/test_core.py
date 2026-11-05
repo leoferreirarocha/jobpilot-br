@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import Job, Ledger, answer_for, eligible, monthly_salary, rank, resume_language, search_urls
+from core import Job, Ledger, answer_for, eligible, eligibility_review, monthly_salary, rank, resume_language, search_urls
 
 
 def job(**kwargs):
@@ -50,6 +50,12 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(all("f_AL=true" in x for x in urls))
         self.assertIn("f_WT=2", urls[0])
         self.assertIn("Curitiba", urls[1])
+
+    def test_explicit_eligibility_needs_review_without_inference(self):
+        self.assertIsNone(eligibility_review(job(),{}))
+        restricted=job(title="Desenvolvedor Junior - PCD")
+        self.assertIsNotNone(eligibility_review(restricted,{}))
+        self.assertIsNone(eligibility_review(restricted,{"reviewed_eligibility_job_ids":["123"]}))
 
 
 class LedgerTests(unittest.TestCase):

@@ -2,7 +2,7 @@
 
 Assistente local em Python para buscar, classificar e candidatar-se a vagas com **Candidatura simplificada** no LinkedIn. Aceita vagas presenciais/híbridas em Curitiba e remotas no Brasil. Inclui buscas de desenvolvimento, QA, suporte e funções de entrada mais amplas.
 
-**Estado:** versão com recuperação de falhas por anúncio. Em 5 de novembro de 2026, os quatro anúncios envolvidos na falha do agendamento foram lidos corretamente após a correção. Há 40 testes de regras, formulários e recuperação de falhas. O funcionamento continua dependendo da sessão e do layout atual da conta; não há garantia de envio em todo formulário nem de atingir a cota diária.
+**Estado:** versão com recuperação de falhas por anúncio. Em 5 de novembro de 2026, os quatro anúncios envolvidos na falha do agendamento foram lidos corretamente após a correção. Há 44 testes de regras, formulários e recuperação de falhas. O funcionamento continua dependendo da sessão e do layout atual da conta; não há garantia de envio em todo formulário nem de atingir a cota diária.
 
 O LinkedIn [proíbe automação por terceiros](https://www.linkedin.com/help/linkedin/answer/a1341543) e pode restringir contas. [Há limites diários e por velocidade](https://www.linkedin.com/help/linkedin/answer/a8068422), sem número universal publicado. A rotina para diante de limite, CAPTCHA ou verificação de segurança; não usa stealth, proxies, rotação de contas, resolução de CAPTCHA ou tentativa de contornar bloqueios.
 
@@ -47,13 +47,14 @@ O currículo em inglês é escolhido quando a descrição contém predominância
 ## Formulários e limites
 
 - Preenche somente contatos inequívocos ou perguntas com resposta exata cadastrada em `answers`.
+- Vagas explicitamente afirmativas ou para PCD exigem revisão antes de abrir a candidatura; o programa não infere deficiência nem pertencimento a grupos. Depois de confirmar pessoalmente a elegibilidade de uma vaga, seu número pode ser incluído em `reviewed_eligibility_job_ids`. Essa lista não altera os filtros de região/modalidade nem o histórico.
 - Perguntas obrigatórias desconhecidas ou respostas desconhecidas pré-preenchidas pelo site ficam em `pending` no relatório. Campos opcionais desconhecidos e vazios permanecem em branco. Não presume autorização de trabalho, tempo de experiência, formação concluída, disponibilidade, pretensão salarial ou dados demográficos. Checkboxes e radios ficam para revisão pessoal.
 - Para adicionar uma resposta textual ou de seleção, copie o rótulo exato para `answers` em `config.local.json` e informe o valor verdadeiro. Por exemplo: `"Código do país": "Brasil (+55)"`, se essa for a opção exibida. Não use respostas genéricas por palavra-chave.
 - Exige upload identificado como currículo antes do envio. Na interface atual, usa o botão de upload e confirma que o PDF ficou selecionado. Em candidaturas seguintes, reutiliza apenas o mesmo nome de arquivo cujo conteúdo foi previamente identificado por SHA-256 no registro local. Pedidos de outros documentos ficam para revisão.
 - `max_per_day: null` significa **sem cota artificial local**. Pode definir um inteiro para limitar os envios. O limite real continua sendo o do LinkedIn.
 - `max_candidates`, `max_minutes` e `pages_per_search` limitam o trabalho de uma execução, não representam a cota do LinkedIn. Portanto a execução pode terminar antes de gastar a cota.
 - Um limite ou alerta de segurança pausa o restante do dia UTC. O script não repete tentativas naquela data.
-- Antes de clicar em enviar, registra a tentativa no SQLite. Se a confirmação não aparecer, marca o resultado como incerto e encerra. Essa vaga não será reenviada automaticamente. Verifique a aba de candidaturas do LinkedIn antes de qualquer correção manual no histórico.
+- Antes de clicar em enviar, registra a tentativa no SQLite. Se a janela de sucesso não aparecer, faz uma única consulta de leitura à página da vaga e aceita como confirmação somente o cartão de status da candidatura, separado da descrição. Se isso também não confirmar o envio, mantém o resultado incerto e encerra. Essa vaga não será reenviada automaticamente. Verifique a aba de candidaturas do LinkedIn antes de qualquer correção manual no histórico.
 - Uma trava de arquivo impede duas execuções simultâneas com o mesmo perfil.
 
 ## Recuperação de falhas

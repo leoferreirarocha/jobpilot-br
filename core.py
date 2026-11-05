@@ -99,6 +99,15 @@ def resume_language(job: Job) -> str:
     return "en" if en >= 4 and en > pt else "pt"
 
 
+def eligibility_review(job: Job, config: dict) -> str | None:
+    reviewed = {str(job_id) for job_id in config.get("reviewed_eligibility_job_ids", [])}
+    if job.id in reviewed:
+        return None
+    if re.search(r"\bpcd\b|pessoas? com deficiencia|\bafirmativ[ao]s?\b|\baffirmative\b", norm(job.title)):
+        return "Vaga afirmativa ou com requisito especifico de elegibilidade: confirmar pessoalmente antes do envio"
+    return None
+
+
 def answer_for(label: str, config: dict) -> str | None:
     """Only exact reviewed questions or unambiguous contact fields are filled."""
     key = norm(label).rstrip(" *:")

@@ -239,6 +239,34 @@ class ResilienceTests(unittest.TestCase):
         self.assertIn("Years of experience",pending)
         self.assertFalse(self.ledger.protected("123"))
 
+    def test_affirmative_job_requires_review_before_opening_application(self):
+        self.page.set_content(LEGACY_FORM)
+        job=Job("123","Analista Junior - Vaga Afirmativa PCD","Empresa","Brasil","Remoto","Suporte")
+        status,pending=jobpilot.apply(self.page,job,self.config,self.ledger)
+        self.assertEqual(status,"needs_review")
+        self.assertIn("elegibilidade",pending[0])
+        self.assertFalse(self.page.get_by_role("dialog").is_visible())
+        self.assertFalse(self.ledger.protected("123"))
+
+    def test_lost_success_modal_is_confirmed_without_second_submission(self):
+        requests=[]
+        applied='''<title>Desenvolvedor Junior | Empresa | LinkedIn</title><section><div><h2>Status da candidatura</h2></div><p>Candidatura enviada</p></section><section><h2>Sobre a vaga</h2><p>Desenvolvimento</p></section>'''
+        initial=LEGACY_FORM.replace("'<h2>Candidatura enviada</h2>'", "'<p>Carregando confirmação</p>'")
+        def respond(route):
+            requests.append(route.request.url)
+            route.fulfill(content_type="text/html; charset=utf-8",body=initial if len(requests)==1 else applied)
+        self.page.route("**/*",respond)
+        job=jobpilot.read_job(self.page,"123")
+        with patch.object(jobpilot,"CONFIRMATION_TIMEOUT_MS",200):
+            status,pending=jobpilot.apply(self.page,job,self.config,self.ledger)
+        self.assertEqual((status,pending),("submitted",[]))
+        self.assertEqual(self.ledger.count_today(),1)
+        self.assertEqual(len(requests),2)
+
+    def test_status_words_in_description_are_not_confirmation(self):
+        self.page.set_content('<section><h2>Sobre a vaga</h2><h2>Status da candidatura</h2><p>Candidatura enviada</p></section>')
+        self.assertFalse(self.page.evaluate(jobpilot.STATUS_CONFIRMATION_JS))
+
 
 if __name__ == "__main__":
     unittest.main()

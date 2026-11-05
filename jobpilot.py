@@ -14,7 +14,7 @@ from pathlib import Path
 
 from playwright.sync_api import Error as BrowserError, TimeoutError as BrowserTimeout
 
-from core import Job, Ledger, answer_for, eligible, norm, rank, resume_language, save_json, search_urls
+from core import Job, Ledger, answer_for, eligible, eligibility_review, norm, rank, resume_language, save_json, search_urls
 from page_reader import JOB_READY_JS, JOB_SNAPSHOT_JS
 
 ROOT = Path(__file__).resolve().parent
@@ -29,6 +29,20 @@ STEP_SIGNATURE_JS = r"""el => JSON.stringify({
 FORM_READY_JS = r"""el => [...el.querySelectorAll('button,[role="button"]')].some(button =>
     button.getClientRects().length>0 && /^(Next|Avançar|Continuar|Continue|Review|Revisar|Avaliar|Enviar candidatura|Submit application)\b/i.test(
         button.getAttribute('aria-label') || button.innerText.trim()))"""
+CONFIRMATION_TIMEOUT_MS = 15000
+STATUS_CONFIRMATION_JS = r"""() => {
+    const headings=[...document.querySelectorAll('h2,h3,[role="heading"]')];
+    const about=headings.find(el=>/^(Sobre a vaga|About the job)$/i.test(el.innerText.trim()));
+    if(!about) return false;
+    for(const heading of headings.filter(el=>/^(Status da candidatura|Application status)$/i.test(el.innerText.trim()))) {
+        if(!(heading.compareDocumentPosition(about)&Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+        for(let el=heading.parentElement,n=0; el && n<3; el=el.parentElement,n++) {
+            if(el.contains(about)) break;
+            if(el.innerText.split(/\n/).some(text=>/^(Candidatura (foi )?enviada|Application (was )?(sent|submitted)|Applied)$/i.test(text.trim()))) return true;
+        }
+    }
+    return false;
+}"""
 
 
 class StopRun(Exception):
@@ -365,7 +379,30 @@ def select_uploaded_resume(page, dialog, resume: Path) -> bool:
     return True
 
 
+def confirm_submission_by_status(page, job):
+    """One read-only GET can confirm an accepted application after a lost modal."""
+    guard(page)
+    try:
+        response = page.goto(job.url, wait_until="domcontentloaded", timeout=30000)
+        guard(page)
+        if response and response.status == 429:
+            raise StopRun("Limite ou pausa HTTP 429 do LinkedIn; nenhuma nova tentativa hoje (UTC).")
+        if response and response.status != 200:
+            return False
+        page.wait_for_function(STATUS_CONFIRMATION_JS, timeout=10000)
+        return True
+    except BrowserError:
+        try:
+            guard(page)
+        except BrowserError:
+            pass
+        return False
+
+
 def apply(page, job, config, ledger):
+    requirement = eligibility_review(job, config)
+    if requirement:
+        return "needs_review", [requirement]
     if re.search(r"\b(application submitted|candidatura enviada|ja se candidatou|already applied)\b", norm(page.locator("body").inner_text())):
         ledger.record(job, "already_applied")
         return "already_applied", []
@@ -406,11 +443,14 @@ def apply(page, job, config, ledger):
                 submit.click()
                 page.get_by_role("heading", name=re.compile(
                     r"^(Your )?application (was )?(sent|submitted)|^(Sua )?candidatura (foi )?enviada", re.I
-                )).first.wait_for(state="visible", timeout=15000)
+                )).first.wait_for(state="visible", timeout=CONFIRMATION_TIMEOUT_MS)
                 ledger.record(job, "submitted", "Confirmacao visivel de envio")
                 return "submitted", []
             except Exception:
                 ledger.record(job, "uncertain", "Clique de envio iniciado; confirmar no LinkedIn antes de qualquer nova tentativa")
+                if confirm_submission_by_status(page, job):
+                    ledger.record(job, "submitted", "Confirmado por consulta somente de leitura ao status da candidatura")
+                    return "submitted", []
                 guard(page)
                 raise StopRun("Resultado de envio incerto; registrado sem repetir a candidatura.")
         next_button = visible_button(dialog, r"^(Next|Avançar|Continuar|Continue|Review|Revisar|Avaliar)\b")
