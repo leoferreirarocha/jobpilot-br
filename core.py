@@ -110,9 +110,12 @@ def answer_for(label: str, config: dict) -> str | None:
         "email": "email", "email address": "email", "endereco de email": "email", "e-mail": "email",
         "mobile phone number": "phone", "phone number": "phone", "numero de telefone": "phone",
         "telefone celular": "phone", "numero de telefone celular": "phone", "celular": "phone",
+        "codigo do pais": "phone_country", "country/region code": "phone_country",
         "first name": "first_name", "nome": "first_name", "last name": "last_name", "sobrenome": "last_name",
         "linkedin profile": "linkedin", "perfil do linkedin": "linkedin",
         "github": "github", "portfolio": "portfolio",
+        "current location": "location", "what is your current location?": "location",
+        "localizacao atual": "location", "qual e a sua localizacao atual?": "location",
     }
     value = contact.get(fields.get(key, ""))
     return str(value) if value else None

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -88,8 +89,9 @@ def guard(page):
         raise StopRun("Limite ou pausa do LinkedIn detectado; nenhuma nova tentativa hoje (UTC).")
     if any(value in url for value in ["/checkpoint/", "/challenge/", "/authwall"]):
         raise StopRun("Verificacao de seguranca do LinkedIn. Resolva pessoalmente no modo login.")
-    if page.locator('iframe[src*="captcha"], iframe[title*="reCAPTCHA"], #captcha-internal').count():
-        raise StopRun("CAPTCHA detectado. A rotina nao tenta resolver ou contornar a verificacao.")
+    for challenge in page.locator('iframe[src*="captcha"], iframe[title*="reCAPTCHA"], #captcha-internal').all():
+        if challenge.is_visible():
+            raise StopRun("CAPTCHA visivel detectado. Resolva pessoalmente; a rotina nao tenta contornar a verificacao.")
     if re.search(r"/login|/uas/", url):
         raise StopRun("Sessao ausente ou expirada. Abra Entrar-LinkedIn.cmd.")
 
@@ -125,6 +127,10 @@ def collect(page, config, deadline):
             raise StopRun("Nao foi possivel confirmar uma sessao autenticada. Abra Entrar-LinkedIn.cmd.")
         # Wait for actual search cards or the no-results UI, rather than a guessed fixed delay.
         page.locator('[data-occludable-job-id], .jobs-search-results-list, .jobs-search-no-results-banner, [componentkey="SearchResultsMainContent"], [componentkey="searchResultsHeaderComponent"]').first.wait_for(timeout=15000)
+        page.wait_for_function(r"""() => {
+            if(document.querySelector('[componentkey^="job-card-component-ref-"], [data-occludable-job-id], .job-card-container')) return true;
+            return /nenhuma vaga|nenhum resultado|nao encontramos|não encontramos|no jobs found|no matching jobs|\b0 resultados\b/i.test(document.body.innerText);
+        }""", timeout=25000)
         container = page.locator('.jobs-search-results-list, .scaffold-layout__list, [componentkey="SearchResultsMainContent"]').first
         for _ in range(4):
             for card in page.locator('[componentkey^="job-card-component-ref-"][role="button"]').all():
@@ -251,6 +257,35 @@ def fill_step(dialog, config, resume: Path):
     return sorted(set(pending))
 
 
+def select_uploaded_resume(page, dialog, resume: Path) -> bool:
+    """Current UI opens a file chooser instead of exposing an input[type=file]."""
+    upload = visible_button(dialog, r"^(Carregar currículo|Upload resume|Upload CV)$")
+    if upload is None:
+        return False
+    digest = hashlib.sha256(resume.read_bytes()).hexdigest()
+    history_path = ROOT / "data/resume-uploads.json"
+    history = json.loads(history_path.read_text(encoding="utf-8")) if history_path.exists() else {}
+    name_pattern = re.compile(r"(?:^|\s)" + re.escape(resume.name) + r"(?:\s|$)", re.I)
+    choices = dialog.get_by_role("button", name=name_pattern)
+    if history.get(resume.name) != digest or not choices.count():
+        with page.expect_file_chooser(timeout=10000) as chooser:
+            upload.click()
+        chooser.value.set_files(str(resume))
+        choices.first.wait_for(state="visible", timeout=20000)
+    choices.first.click()
+    selected = False
+    for container in dialog.locator("div[aria-label]").all():
+        if container.get_attribute("aria-label") == resume.name:
+            radio = container.locator('input[type="radio"]')
+            if radio.count() and radio.first.is_checked():
+                selected = True
+    if not selected:
+        raise Review("O PDF foi carregado, mas sua selecao nao foi confirmada")
+    history[resume.name] = digest
+    save_json(history_path, history)
+    return True
+
+
 def apply(page, job, config, ledger):
     if re.search(r"\b(application submitted|candidatura enviada|ja se candidatou|already applied)\b", norm(page.locator("body").inner_text())):
         ledger.record(job, "already_applied")
@@ -271,6 +306,10 @@ def apply(page, job, config, ledger):
     upload_seen = False
     for _ in range(12):
         guard(page)
+        try:
+            upload_seen |= select_uploaded_resume(page, dialog, resume)
+        except Review as e:
+            return "needs_review", [str(e)]
         upload_seen |= dialog.locator('input[type="file"]').count() > 0
         pending = fill_step(dialog, config, resume)
         if pending:
@@ -293,11 +332,12 @@ def apply(page, job, config, ledger):
                 ledger.record(job, "uncertain", "Clique de envio iniciado; confirmar no LinkedIn antes de qualquer nova tentativa")
                 guard(page)
                 raise StopRun("Resultado de envio incerto; registrado sem repetir a candidatura.")
-        next_button = visible_button(dialog, r"^(Next|Avançar|Continuar|Continue|Review|Revisar|Revisar candidatura)$")
+        next_button = visible_button(dialog, r"^(Next|Avançar|Continuar|Continue|Review|Revisar|Revisar candidatura|Avaliar)$")
         if not next_button:
             return "needs_review", ["Etapa ou botao nao reconhecido"]
         next_button.click()
-        errors = dialog.locator('.artdeco-inline-feedback--error, [role="alert"]').all_inner_texts()
+        errors = dialog.locator('.artdeco-inline-feedback--error').all_inner_texts()
+        errors += [label_of(field) + " (campo invalido)" for field in dialog.locator('[aria-invalid="true"]').all()]
         if errors:
             return "needs_review", ["Validacao do formulario: " + " ".join(errors)]
     return "needs_review", ["Formulario excedeu 12 etapas"]
@@ -308,11 +348,14 @@ def main():
     parser.add_argument("command", choices=["check", "login", "plan", "run"])
     parser.add_argument("--max-candidates", type=int, help="Limite de vagas examinadas nesta execucao")
     parser.add_argument("--minutes", type=float, help="Tempo maximo desta execucao")
+    parser.add_argument("--job-id", action="append", help="Examinar uma vaga especifica; os filtros continuam obrigatorios")
     args = parser.parse_args()
     summary = {"at": Ledger.now(), "mode": args.command, "submitted": 0, "candidates": 0, "pending": [], "results": [], "status": "ok"}
     ledger = None
     try:
         config = load_config()
+        if args.job_id and any(not re.fullmatch(r"\d+", value) for value in args.job_id):
+            raise StopRun("--job-id deve conter somente o numero da vaga")
         if args.max_candidates is not None:
             if args.max_candidates < 1:
                 raise StopRun("--max-candidates deve ser positivo")
@@ -347,7 +390,8 @@ def main():
                         return 0
                     deadline = time.monotonic() + 60 * config.get("max_minutes", 60)
                     page = context.pages[0] if context.pages else context.new_page()
-                    ids = collect(page, config, deadline)
+                    summary["phase"] = "search"
+                    ids = args.job_id or collect(page, config, deadline)
                     jobs = []
                     for job_id in ids:
                         if time.monotonic() > deadline:
@@ -355,6 +399,7 @@ def main():
                         if ledger.protected(job_id):
                             continue
                         try:
+                            summary["phase"] = "read_job:" + job_id
                             job = read_job(page, job_id)
                         except Review as e:
                             summary["pending"].append({"job_id": job_id, "questions": [str(e)]})
@@ -375,6 +420,7 @@ def main():
                         # A fresh tab prevents carrying a partially filled modal into the next application.
                         application_page = context.new_page()
                         try:
+                            summary["phase"] = "apply:" + job.id
                             fresh_job = read_job(application_page, job.id)
                             if not eligible(fresh_job):
                                 continue
@@ -400,7 +446,7 @@ def main():
         return 2
     except Exception as e:
         # Log exception class only: browser exceptions can embed personal form values.
-        summary.update(status="error", stop_reason=f"{type(e).__name__}: layout, sessao ou rede precisa de revisao local")
+        summary.update(status="error", stop_reason=f"{type(e).__name__} ({summary.get('phase', 'startup')}): layout, sessao ou rede precisa de revisao local")
         return 1
     finally:
         if args.command != "check":

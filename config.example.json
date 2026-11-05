@@ -4,6 +4,8 @@
     "last_name": "SEU SOBRENOME",
     "email": "seu-email@example.com",
     "phone": "41999999999",
+    "phone_country": "Brasil (+55)",
+    "location": "Curitiba, Paraná, Brasil",
     "linkedin": "https://www.linkedin.com/in/seu-perfil/",
     "github": "https://github.com/seu-usuario",
     "portfolio": "https://example.com/portfolio"

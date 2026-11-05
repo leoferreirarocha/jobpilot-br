@@ -2,7 +2,7 @@
 
 Assistente local em Python para buscar, classificar e candidatar-se a vagas com **Candidatura simplificada** no LinkedIn. Aceita vagas presenciais/híbridas em Curitiba e remotas no Brasil. Inclui buscas de desenvolvimento, QA, suporte e funções de entrada mais amplas.
 
-**Estado:** protótipo. As regras e os formulários são testados em páginas locais simuladas; o funcionamento no LinkedIn depende da sessão e do layout atual da conta. Não há garantia de envio nem de atingir a cota diária.
+**Estado:** primeira versão funcional. Em 5 de novembro de 2026, a busca autenticada foi validada e uma candidatura real foi enviada e confirmada. Há 21 testes de regras e formulários simulados. O funcionamento continua dependendo da sessão e do layout atual da conta; não há garantia de envio em todo formulário nem de atingir a cota diária.
 
 O LinkedIn [proíbe automação por terceiros](https://www.linkedin.com/help/linkedin/answer/a1341543) e pode restringir contas. [Há limites diários e por velocidade](https://www.linkedin.com/help/linkedin/answer/a8068422), sem número universal publicado. A rotina para diante de limite, CAPTCHA ou verificação de segurança; não usa stealth, proxies, rotação de contas, resolução de CAPTCHA ou tentativa de contornar bloqueios.
 
@@ -34,6 +34,8 @@ Coloque seus dois PDFs em `resumes/` e edite `config.local.json`. Verifique os c
 .\.venv\Scripts\python.exe jobpilot.py run
 ```
 
+Para uma verificação curta sem envio, use `jobpilot.py plan --max-candidates 8 --minutes 5`. Para examinar uma vaga específica, acrescente `--job-id NUMERO`; os filtros de região/modalidade e o histórico continuam obrigatórios.
+
 ## Como escolhe as vagas
 
 As buscas usam os filtros do LinkedIn para candidatura simplificada, últimos sete dias e região/modalidade. A rotina confere também a localização e a modalidade visíveis na vaga. Localização ou modalidade sem confirmação ficam de fora.
@@ -47,7 +49,7 @@ O currículo em inglês é escolhido quando a descrição contém predominância
 - Preenche somente contatos inequívocos ou perguntas com resposta exata cadastrada em `answers`.
 - Perguntas desconhecidas, inclusive pré-preenchidas pelo site, ficam em `pending` no relatório. Não presume autorização de trabalho, tempo de experiência, formação concluída, disponibilidade, pretensão salarial ou dados demográficos. Checkboxes e radios ficam para revisão pessoal.
 - Para adicionar uma resposta textual ou de seleção, copie o rótulo exato para `answers` em `config.local.json` e informe o valor verdadeiro. Por exemplo: `"Código do país": "Brasil (+55)"`, se essa for a opção exibida. Não use respostas genéricas por palavra-chave.
-- Exige upload identificado como currículo antes do envio. Pedidos de outros documentos ficam para revisão.
+- Exige upload identificado como currículo antes do envio. Na interface atual, usa o botão de upload e confirma que o PDF ficou selecionado. Em candidaturas seguintes, reutiliza apenas o mesmo nome de arquivo cujo conteúdo foi previamente identificado por SHA-256 no registro local. Pedidos de outros documentos ficam para revisão.
 - `max_per_day: null` significa **sem cota artificial local**. Pode definir um inteiro para limitar os envios. O limite real continua sendo o do LinkedIn.
 - `max_candidates`, `max_minutes` e `pages_per_search` limitam o trabalho de uma execução, não representam a cota do LinkedIn. Portanto a execução pode terminar antes de gastar a cota.
 - Um limite ou alerta de segurança pausa o restante do dia UTC. O script não repete tentativas naquela data.

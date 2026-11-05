@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright
 from core import Job, Ledger
 from jobpilot import StopRun, apply, collect, guard, read_job
 import time
+from unittest.mock import patch
 
 
 FORM = '''<!doctype html><html><body>
@@ -85,7 +86,7 @@ class BrowserTests(unittest.TestCase):
         <div role=dialog hidden><form onsubmit="return false">
         <div id=step1><label>Email address<input type=email></label>
         <button onclick="document.getElementById('step1').hidden=true;document.getElementById('step2').hidden=false">Avançar</button></div>
-        <div id=step2 hidden><label>Currículo<input type=file accept=application/pdf></label>
+        <div id=step2 hidden><div role=alert>Upload do currículo concluído</div><label>Currículo<input type=file accept=application/pdf></label>
         <button onclick="window.sends=1;document.querySelector('[role=dialog]').innerHTML='<h2>Candidatura enviada</h2>'">Enviar candidatura</button></div>
         </form></div>''')
         status, pending = apply(self.page, self.job, self.config, self.ledger)
@@ -118,6 +119,29 @@ class BrowserTests(unittest.TestCase):
         self.page.route("**/*", lambda r: r.fulfill(content_type="text/html; charset=utf-8", body=html))
         ids = collect(self.page, {"queries": ["C#"], "max_candidates": 2}, time.monotonic()+20)
         self.assertEqual(ids, ["123", "456"])
+
+    def test_modern_file_chooser_confirms_selected_pdf(self):
+        self.page.set_content('''<button onclick="document.querySelector('[role=dialog]').hidden=false">Candidatura simplificada</button>
+        <div role=dialog hidden><button onclick="document.getElementById('file').click()">Carregar currículo</button>
+        <input id=file type=file style="display:none" onchange="addResume(this)">
+        <button onclick="window.sends=1;document.querySelector('[role=dialog]').innerHTML='<h2>Candidatura enviada</h2>'">Enviar candidatura</button></div>
+        <script>function addResume(input) {
+          const name=input.files[0].name;
+          const card=document.createElement('button');card.type='button';card.textContent='PDF '+name;
+          const marker=document.createElement('div');marker.setAttribute('aria-label',name);
+          const radio=document.createElement('input');radio.type='radio';radio.style.display='none';marker.append(radio);
+          card.onclick=()=>radio.checked=true;card.append(marker);document.querySelector('[role=dialog]').append(card);input.remove();
+        }</script>''')
+        with patch("jobpilot.ROOT", Path(self.temp.name)):
+            status, pending = apply(self.page, self.job, self.config, self.ledger)
+        self.assertEqual((status, pending), ("submitted", []))
+
+    def test_invisible_background_captcha_is_not_a_challenge(self):
+        self.page.set_content('<iframe title="reCAPTCHA" src="about:blank" style="display:none"></iframe>')
+        guard(self.page)
+        self.page.locator("iframe").evaluate("el=>el.style.display='block'")
+        with self.assertRaises(StopRun):
+            guard(self.page)
 
 
 if __name__ == "__main__":
