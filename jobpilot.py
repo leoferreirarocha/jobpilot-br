@@ -12,10 +12,23 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from playwright.sync_api import Error as BrowserError, TimeoutError as BrowserTimeout
+
 from core import Job, Ledger, answer_for, eligible, norm, rank, resume_language, save_json, search_urls
+from page_reader import JOB_READY_JS, JOB_SNAPSHOT_JS
 
 ROOT = Path(__file__).resolve().parent
 APPLY_SELECTOR = '[data-view-name="job-apply-button"], button[aria-label*="simplificada"], button[aria-label*="Easy Apply"]'
+STEP_SIGNATURE_JS = r"""el => JSON.stringify({
+    page:(el.innerText.match(/\b\d+\s+(?:de|of)\s+\d+/i)||[])[0]||'',
+    fields:[...el.querySelectorAll('input,textarea,select,[role="checkbox"],[role="radio"]')].map(field=>
+        [field.tagName,field.id,field.type,field.name,field.getAttribute('aria-label'),field.getClientRects().length>0].join('|')),
+    headings:[...el.querySelectorAll('h2,h3,legend')].map(node=>node.innerText.trim()),
+    buttons:[...el.querySelectorAll('button')].filter(node=>node.getClientRects().length>0).map(node=>node.innerText.trim()).filter(Boolean)
+})"""
+FORM_READY_JS = r"""el => [...el.querySelectorAll('button,[role="button"]')].some(button =>
+    button.getClientRects().length>0 && /^(Next|Avançar|Continuar|Continue|Review|Revisar|Avaliar|Enviar candidatura|Submit application)\b/i.test(
+        button.getAttribute('aria-label') || button.innerText.trim()))"""
 
 
 class StopRun(Exception):
@@ -24,6 +37,21 @@ class StopRun(Exception):
 
 class Review(Exception):
     pass
+
+
+class Unavailable(Review):
+    pass
+
+
+class BudgetReached(Exception):
+    pass
+
+
+def timeout_for(deadline, maximum=30000):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise BudgetReached()
+    return maximum if remaining >= maximum / 1000 else max(1, int(remaining * 1000))
 
 
 @contextmanager
@@ -80,20 +108,20 @@ def visible_button(parent, pattern):
 
 def guard(page):
     url = page.url.lower()
-    text = norm(page.locator("body").inner_text(timeout=10000))
-    limits = ["reached today's easy apply limit", "reached your daily", "daily application limit",
-              "daily easy apply limit", "atingiu o limite", "limite diario", "limite de candidaturas",
-              "applying too quickly", "too many applications", "temporarily paused", "try again tomorrow",
-              "tente novamente amanha", "muitas candidaturas", "muito rapido", "temporary pause on easy apply"]
-    if any(value in text for value in limits):
-        raise StopRun("Limite ou pausa do LinkedIn detectado; nenhuma nova tentativa hoje (UTC).")
     if any(value in url for value in ["/checkpoint/", "/challenge/", "/authwall"]):
         raise StopRun("Verificacao de seguranca do LinkedIn. Resolva pessoalmente no modo login.")
+    if re.search(r"/login|/uas/", url):
+        raise StopRun("Sessao ausente ou expirada. Abra Entrar-LinkedIn.cmd.")
+    text = norm(page.locator("body").inner_text(timeout=10000))
+    limits = ["reached today's easy apply limit", "reached your daily", "daily application limit",
+              "daily easy apply limit", "atingiu o limite de candidaturas", "limite diario de candidaturas", "limite de candidaturas simplificadas",
+              "applying too quickly", "too many applications", "temporary pause on easy apply"]
+    notices = norm(" ".join(page.locator('[role="alert"], [role="dialog"], .artdeco-toast-item').all_inner_texts()))
+    if any(value in text for value in limits) or (re.search(r"candidat|appl", notices) and any(value in notices for value in ["atingiu o limite", "limite diario", "temporarily paused", "try again tomorrow", "tente novamente amanha", "muitas candidaturas", "muito rapido"])):
+        raise StopRun("Limite ou pausa do LinkedIn detectado; nenhuma nova tentativa hoje (UTC).")
     for challenge in page.locator('iframe[src*="captcha"], iframe[title*="reCAPTCHA"], #captcha-internal').all():
         if challenge.is_visible():
             raise StopRun("CAPTCHA visivel detectado. Resolva pessoalmente; a rotina nao tenta contornar a verificacao.")
-    if re.search(r"/login|/uas/", url):
-        raise StopRun("Sessao ausente ou expirada. Abra Entrar-LinkedIn.cmd.")
 
 
 def authenticated(page):
@@ -116,47 +144,102 @@ def login(context):
     raise StopRun("Tempo de login esgotado. Execute Entrar-LinkedIn.cmd para tentar novamente.")
 
 
-def collect(page, config, deadline):
+def collect(page, config, deadline, issues=None):
+    issues = issues if issues is not None else []
     ids = []
     for url in search_urls(config):
         if time.monotonic() > deadline:
             break
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        guard(page)
-        if not authenticated(page):
-            raise StopRun("Nao foi possivel confirmar uma sessao autenticada. Abra Entrar-LinkedIn.cmd.")
-        # Wait for actual search cards or the no-results UI, rather than a guessed fixed delay.
-        page.locator('[data-occludable-job-id], .jobs-search-results-list, .jobs-search-no-results-banner, [componentkey="SearchResultsMainContent"], [componentkey="searchResultsHeaderComponent"]').first.wait_for(timeout=15000)
-        page.wait_for_function(r"""() => {
-            if(document.querySelector('[componentkey^="job-card-component-ref-"], [data-occludable-job-id], .job-card-container')) return true;
-            return /nenhuma vaga|nenhum resultado|nao encontramos|não encontramos|no jobs found|no matching jobs|\b0 resultados\b/i.test(document.body.innerText);
-        }""", timeout=25000)
-        container = page.locator('.jobs-search-results-list, .scaffold-layout__list, [componentkey="SearchResultsMainContent"]').first
-        for _ in range(4):
-            for card in page.locator('[componentkey^="job-card-component-ref-"][role="button"]').all():
-                match = re.search(r"job-card-component-ref-(\d+)", card.get_attribute("componentkey") or "")
-                if match and match[1] not in ids:
-                    ids.append(match[1])
-            for link in page.locator('a[href*="/jobs/view/"]').all():
-                match = re.search(r"/jobs/view/(\d+)", link.get_attribute("href") or "")
-                if match and match[1] not in ids:
-                    ids.append(match[1])
-            if len(ids) >= config.get("max_candidates", 150):
-                return ids[:config.get("max_candidates", 150)]
-            if container.count():
-                container.evaluate("""el => {
-                    let parent=el;
-                    while(parent && !(parent.scrollHeight > parent.clientHeight && /auto|scroll/.test(getComputedStyle(parent).overflowY))) parent=parent.parentElement;
-                    if(parent) parent.scrollBy(0, parent.clientHeight);
-                }""")
-                page.wait_for_timeout(500)
+        try:
+            response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_for(deadline))
+            guard(page)
+            if response and response.status == 429:
+                raise StopRun("Limite ou pausa HTTP 429 do LinkedIn; nenhuma nova tentativa hoje (UTC).")
+            if response and response.status == 403:
+                raise StopRun("Acesso recusado pelo LinkedIn (HTTP 403); verifique pessoalmente a sessao.")
+            if not authenticated(page):
+                raise StopRun("Nao foi possivel confirmar uma sessao autenticada. Abra Entrar-LinkedIn.cmd.")
+            # Wait for actual cards, not the results container before hydration.
+            page.wait_for_function(r"""() => {
+                if(document.querySelector('[componentkey^="job-card-component-ref-"], [data-occludable-job-id], .job-card-container')) return true;
+                return /nenhuma vaga|nenhum resultado|nao encontramos|não encontramos|no jobs found|no matching jobs|\b0 resultados\b/i.test(document.body.innerText);
+            }""", timeout=timeout_for(deadline, 25000))
+            guard(page)
+            container = page.locator('.jobs-search-results-list, .scaffold-layout__list, [componentkey="SearchResultsMainContent"]').first
+            for _ in range(4):
+                timeout_for(deadline)
+                # Only links within search results; recommendation links are unrelated.
+                cards = page.locator('[componentkey^="job-card-component-ref-"][role="button"], [data-occludable-job-id]')
+                for card in cards.all():
+                    raw = card.get_attribute("componentkey") or card.get_attribute("data-occludable-job-id") or ""
+                    match = re.search(r"(\d+)$", raw)
+                    if match and match[1] not in ids:
+                        ids.append(match[1])
+                if container.count():
+                    for link in container.locator('a[href*="/jobs/view/"]').all():
+                        match = re.search(r"/jobs/view/(\d+)", link.get_attribute("href") or "")
+                        if match and match[1] not in ids:
+                            ids.append(match[1])
+                if len(ids) >= config.get("max_candidates", 150):
+                    return ids[:config.get("max_candidates", 150)]
+                if container.count():
+                    container.evaluate("""el => {
+                        let parent=el;
+                        while(parent && !(parent.scrollHeight > parent.clientHeight && /auto|scroll/.test(getComputedStyle(parent).overflowY))) parent=parent.parentElement;
+                        if(parent) parent.scrollBy(0, parent.clientHeight);
+                    }""")
+                    page.wait_for_timeout(500)
+        except BudgetReached:
+            break
+        except BrowserError as e:
+            try:
+                guard(page)
+            except BrowserError:
+                pass
+            issues.append({"url": url, "reason": f"{type(e).__name__}: pesquisa nao concluida; demais pesquisas continuam"})
     return ids
 
 
-def read_job(page, job_id):
-    page.goto(f"https://www.linkedin.com/jobs/view/{job_id}/", wait_until="domcontentloaded", timeout=45000)
-    guard(page)
-    page.locator('h1, ' + APPLY_SELECTOR).first.wait_for(timeout=15000)
+def read_job(page, job_id, deadline=float("inf")):
+    """Retry read-only navigation once; isolate a bad ad without retrying a submission."""
+    for attempt in range(2):
+        try:
+            response = page.goto(f"https://www.linkedin.com/jobs/view/{job_id}/", wait_until="domcontentloaded", timeout=timeout_for(deadline))
+            guard(page)
+            status = response.status if response else 200
+            if status == 429:
+                raise StopRun("Limite ou pausa HTTP 429 do LinkedIn; nenhuma nova tentativa hoje (UTC).")
+            if status in {401, 403}:
+                raise StopRun("Acesso recusado pelo LinkedIn. Verifique pessoalmente a sessao.")
+            if status in {404, 410}:
+                raise Unavailable("Anuncio removido ou indisponivel")
+            if status >= 500:
+                if attempt == 0:
+                    continue
+                raise Review(f"Servidor indisponivel (HTTP {status}); vaga ignorada nesta execucao")
+            page.wait_for_function(JOB_READY_JS, timeout=timeout_for(deadline, 15000))
+            guard(page)
+            return parse_job(page, job_id)
+        except (BrowserTimeout, BrowserError) as e:
+            # Stop for authentication/security barriers even if hydration timed out.
+            try:
+                guard(page)
+            except BrowserError:
+                pass
+            if attempt:
+                raise Review(f"{type(e).__name__}: leitura nao concluida apos duas tentativas") from None
+        except Unavailable:
+            raise
+        except Review:
+            if attempt:
+                raise
+    raise Review("Leitura da vaga nao concluida")
+
+
+def parse_job(page, job_id):
+    snapshot = page.evaluate(JOB_SNAPSHOT_JS, APPLY_SELECTOR)
+    if snapshot["unavailable"]:
+        raise Unavailable("Anuncio encerrado ou indisponivel")
     title = first_text(page, "h1")
     company = first_text(page, ".job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name")
     location = first_text(page, ".job-details-jobs-unified-top-card__tertiary-description-container, .jobs-unified-top-card__bullet")
@@ -165,31 +248,13 @@ def read_job(page, job_id):
     insights = page.locator(".job-details-jobs-unified-top-card__job-insight, .job-details-fit-level-preferences button, .jobs-unified-top-card__workplace-type")
     if insights.count():
         workplace = " ".join(insights.all_inner_texts())
-    more = visible_button(page, r"^(Show more|Exibir mais|Ver mais)$")
-    if more:
-        more.click()
     description = first_text(page, "#job-details, .jobs-description__content, .jobs-description-content__text")
-    salary_source = workplace
-    if not title and page.locator(APPLY_SELECTOR).count():
-        # 2026 interface: titles are paragraphs; scope to the smallest top card,
-        # avoiding job recommendations and text in the description.
-        top = page.locator(APPLY_SELECTOR).first.evaluate("""button => {
-            let el=button.parentElement;
-            while(el && !el.querySelector('a[href*="/company/"]')) el=el.parentElement;
-            if(!el) return null;
-            const company=el.querySelector('a[href*="/company/"]').innerText.trim();
-            const paragraphs=[...el.querySelectorAll('p')].map(p=>p.innerText.trim()).filter(Boolean);
-            const title=paragraphs.find(text=>text!==company);
-            const location=paragraphs.find(text=>text.includes('·')) || '';
-            const modes=[...el.querySelectorAll('a,button')].map(n=>n.innerText.trim()).filter(text=>/^(Remoto|Remote|Híbrido|Hybrid|Presencial|On.?site)$/i.test(text));
-            return {company,title,location,workplace:modes.join(' '),pay:el.innerText};
-        }""")
-        if top:
-            title, company, location, workplace = (top.get(key, "") for key in ("title", "company", "location", "workplace"))
-            salary_source = top.get("pay", workplace)
-        about = page.get_by_role("heading", name=re.compile(r"^(Sobre a vaga|About the job)$", re.I))
-        if about.count():
-            description = first_text(about.first.locator("xpath=../.."), '[data-testid="expandable-text-box"]')
+    title = title or snapshot["title"]
+    company = company or snapshot["company"]
+    location = location or snapshot["location"]
+    workplace = workplace or snapshot["workplace"]
+    description = description or snapshot["description"]
+    salary_source = snapshot["pay"] or workplace
     if not title or not description:
         raise Review("Layout da vaga nao reconhecido; descricao ou titulo ausente.")
     salary = " ".join(line for line in (salary_source + "\n" + description).splitlines()
@@ -209,10 +274,10 @@ def label_of(field):
     }""")
 
 
-def fill_step(dialog, config, resume: Path):
+def fill_step(dialog, config, resume: Path, selected_resume=False):
     pending = []
-    for field in dialog.locator("input, textarea, select").all():
-        kind = (field.get_attribute("type") or "").lower()
+    for field in dialog.locator('input, textarea, select, [role="checkbox"], [role="radio"]').all():
+        kind = (field.get_attribute("type") or field.get_attribute("role") or "").lower()
         if kind in {"hidden", "submit", "button"} or field.is_disabled():
             continue
         if kind == "file":
@@ -228,12 +293,22 @@ def fill_step(dialog, config, resume: Path):
                 continue
             field.set_input_files(str(resume))
             continue
-        if not field.is_visible():
+        field_id = field.get_attribute("id")
+        labels = dialog.locator('label[for=' + json.dumps(field_id) + ']').all() if field_id else []
+        labels += field.locator("xpath=ancestor::label[1]").all()
+        visible_labels = [label for label in labels if label.is_visible()]
+        if kind == "radio" and selected_resume:
+            document_label = field.evaluate("el=>el.closest('div[aria-label]')?.getAttribute('aria-label')||''")
+            if re.search(r"\.(pdf|docx?)$", document_label, re.I):
+                continue
+        if not field.is_visible() and not visible_labels:
             continue
         label = label_of(field).strip()
         if kind in {"radio", "checkbox"}:
-            if norm(label).startswith(("follow ", "seguir ")):
-                field.uncheck()
+            if norm(label).startswith(("follow ", "seguir ", "siga ")):
+                checked = field.is_checked() if field.evaluate("el=>el.tagName") == "INPUT" else field.get_attribute("aria-checked") == "true"
+                if checked:
+                    (field if field.is_visible() else visible_labels[0]).click()
                 continue
             # No consent, demographic, or other checkbox is silently accepted.
             pending.append(label or "Checkbox/radio sem identificacao")
@@ -243,6 +318,10 @@ def fill_step(dialog, config, resume: Path):
             continue
         answer = answer_for(label, config)
         if answer is None:
+            required = "*" in label or field.evaluate("el=>!!el.required || el.getAttribute('aria-required')==='true' || el.getAttribute('aria-invalid')==='true'")
+            if not required and not field.input_value().strip():
+                # Empty optional questions stay blank; unknown prefilled values still need review.
+                continue
             pending.append(label)
             continue
         if field.evaluate("el => el.tagName") == "SELECT":
@@ -306,12 +385,14 @@ def apply(page, job, config, ledger):
     upload_seen = False
     for _ in range(12):
         guard(page)
+        # The dialog shell appears before its asynchronous form has rendered.
+        page.wait_for_function(FORM_READY_JS, arg=dialog.element_handle(), timeout=15000)
         try:
             upload_seen |= select_uploaded_resume(page, dialog, resume)
         except Review as e:
             return "needs_review", [str(e)]
         upload_seen |= dialog.locator('input[type="file"]').count() > 0
-        pending = fill_step(dialog, config, resume)
+        pending = fill_step(dialog, config, resume, selected_resume=upload_seen)
         if pending:
             return "needs_review", pending
         submit = visible_button(dialog, r"^(Enviar candidatura|Submit application)$")
@@ -332,15 +413,115 @@ def apply(page, job, config, ledger):
                 ledger.record(job, "uncertain", "Clique de envio iniciado; confirmar no LinkedIn antes de qualquer nova tentativa")
                 guard(page)
                 raise StopRun("Resultado de envio incerto; registrado sem repetir a candidatura.")
-        next_button = visible_button(dialog, r"^(Next|Avançar|Continuar|Continue|Review|Revisar|Revisar candidatura|Avaliar)$")
+        next_button = visible_button(dialog, r"^(Next|Avançar|Continuar|Continue|Review|Revisar|Avaliar)\b")
         if not next_button:
-            return "needs_review", ["Etapa ou botao nao reconhecido"]
+            buttons = [button.inner_text().strip()[:80] for button in dialog.get_by_role("button").all() if button.is_visible()]
+            return "needs_review", ["Etapa ou botao nao reconhecido: " + ", ".join(text for text in buttons if text)]
+        before = dialog.evaluate(STEP_SIGNATURE_JS)
+        element = dialog.element_handle()
         next_button.click()
+        # React may keep the previous controls visible while the next step loads.
+        # Audit the new step only after its structure changes, never click Next twice.
+        page.wait_for_function("""args => !args.element.isConnected ||
+            args.element.querySelector('[aria-invalid="true"], .artdeco-inline-feedback--error') ||
+            (""" + STEP_SIGNATURE_JS + ")(args.element) !== args.before", arg={"element": element, "before": before}, timeout=10000)
+        dialog.wait_for(state="visible", timeout=10000)
         errors = dialog.locator('.artdeco-inline-feedback--error').all_inner_texts()
         errors += [label_of(field) + " (campo invalido)" for field in dialog.locator('[aria-invalid="true"]').all()]
         if errors:
             return "needs_review", ["Validacao do formulario: " + " ".join(errors)]
     return "needs_review", ["Formulario excedeu 12 etapas"]
+
+
+def checkpoint(summary, jobs=None):
+    summary["updated_at"] = Ledger.now()
+    save_json(ROOT / "data/last-run.json", summary)
+    if jobs is not None:
+        save_json(ROOT / "data/ranked-jobs.json", [asdict(job) | {"url": job.url} for job in sorted(jobs, key=lambda j: (-j.score, j.id))])
+
+
+def scan_jobs(page, ids, ledger, summary, deadline):
+    jobs = []
+    for job_id in ids:
+        if time.monotonic() >= deadline:
+            summary["finish_reason"] = "Tempo reservado para leitura encerrado"
+            break
+        if ledger.protected(job_id):
+            summary["skipped_registered"] += 1
+            checkpoint(summary, jobs)
+            continue
+        summary["scanned"] += 1
+        summary["phase"] = "read_job:" + job_id
+        try:
+            job = read_job(page, job_id, deadline)
+            if eligible(job):
+                jobs.append(job)
+                summary["candidates"] = len(jobs)
+            else:
+                summary["excluded"] += 1
+        except BudgetReached:
+            summary["finish_reason"] = "Tempo reservado para leitura encerrado"
+            break
+        except Unavailable as e:
+            summary["skipped_unavailable"] += 1
+            summary["read_issues"].append({"job_id": job_id, "kind": "unavailable", "reason": str(e)})
+        except (Review, BrowserError) as e:
+            summary["read_issues"].append({"job_id": job_id, "kind": "read_error", "reason": str(e) if isinstance(e, Review) else type(e).__name__})
+        finally:
+            checkpoint(summary, jobs)
+    return sorted(jobs, key=lambda j: (-j.score, j.id))
+
+
+def send_applications(context, jobs, config, ledger, summary, deadline):
+    for job in jobs:
+        if time.monotonic() >= deadline:
+            summary["finish_reason"] = "Tempo maximo da execucao atingido"
+            break
+        if ledger.protected(job.id):
+            summary["skipped_registered"] += 1
+            continue
+        if config.get("max_per_day") is not None and ledger.count_today() >= config["max_per_day"]:
+            summary["finish_reason"] = "Cota local atingida"
+            break
+        page = context.new_page()
+        try:
+            summary["phase"] = "apply:" + job.id
+            fresh_job = read_job(page, job.id, deadline)
+            if not eligible(fresh_job):
+                summary["excluded"] += 1
+                continue
+            status, pending = apply(page, fresh_job, config, ledger)
+        except BudgetReached:
+            summary["finish_reason"] = "Tempo maximo da execucao atingido"
+            break
+        except Unavailable:
+            status, pending = "unavailable", []
+            summary["skipped_unavailable"] += 1
+        except (Review, BrowserError) as e:
+            # Never turn a reserved submission into a retryable form error.
+            if ledger.status(job.id) == "submitting":
+                ledger.record(job, "uncertain", "Resultado ambiguo apos reserva de envio")
+                raise StopRun("Resultado de envio incerto; verificar pessoalmente antes de tentar novamente.") from None
+            try:
+                guard(page)
+            except BrowserError:
+                pass
+            status, pending = "needs_review", [str(e) if isinstance(e, Review) else type(e).__name__ + ": formulario nao carregado; demais vagas continuam"]
+        finally:
+            try:
+                page.close()
+            except BrowserError:
+                pass
+        if status not in {"submitted", "already_applied"}:
+            ledger.record(job, status, "; ".join(pending))
+        summary["results"].append({"id": job.id, "title": job.title, "company": job.company, "status": status, "url": job.url})
+        if pending:
+            summary["pending"].append({"job_id": job.id, "url": job.url, "questions": pending})
+        summary["submitted"] += status == "submitted"
+        checkpoint(summary)
+        if status == "submitted":
+            remaining = max(0, deadline - time.monotonic())
+            time.sleep(min(remaining, max(0, config.get("seconds_between_applications", 30))))
 
 
 def main():
@@ -350,8 +531,12 @@ def main():
     parser.add_argument("--minutes", type=float, help="Tempo maximo desta execucao")
     parser.add_argument("--job-id", action="append", help="Examinar uma vaga especifica; os filtros continuam obrigatorios")
     args = parser.parse_args()
-    summary = {"at": Ledger.now(), "mode": args.command, "submitted": 0, "candidates": 0, "pending": [], "results": [], "status": "ok"}
+    summary = {"at": Ledger.now(), "mode": args.command, "submitted": 0, "candidates": 0,
+               "discovered": 0, "scanned": 0, "excluded": 0, "skipped_registered": 0,
+               "skipped_unavailable": 0, "read_issues": [], "search_issues": [],
+               "pending": [], "results": [], "status": "running"}
     ledger = None
+    owns_report = False
     try:
         config = load_config()
         if args.job_id and any(not re.fullmatch(r"\d+", value) for value in args.job_id):
@@ -372,6 +557,8 @@ def main():
             return 0
         from playwright.sync_api import sync_playwright
         with single_run(ROOT / "data/run.lock"):
+            owns_report = True
+            checkpoint(summary)
             ledger = Ledger(ROOT / "data/applications.sqlite3")
             if args.command == "run" and ledger.paused():
                 raise StopRun(ledger.paused())
@@ -388,55 +575,23 @@ def main():
                     if args.command == "login":
                         login(context)
                         return 0
-                    deadline = time.monotonic() + 60 * config.get("max_minutes", 60)
+                    started = time.monotonic()
+                    duration = 60 * config.get("max_minutes", 60)
+                    deadline = started + duration
                     page = context.pages[0] if context.pages else context.new_page()
                     summary["phase"] = "search"
-                    ids = args.job_id or collect(page, config, deadline)
-                    jobs = []
-                    for job_id in ids:
-                        if time.monotonic() > deadline:
-                            break
-                        if ledger.protected(job_id):
-                            continue
-                        try:
-                            summary["phase"] = "read_job:" + job_id
-                            job = read_job(page, job_id)
-                        except Review as e:
-                            summary["pending"].append({"job_id": job_id, "questions": [str(e)]})
-                            continue
-                        if eligible(job):
-                            jobs.append(job)
-                    jobs.sort(key=lambda j: (-j.score, j.id))
-                    summary["candidates"] = len(jobs)
-                    save_json(ROOT / "data/ranked-jobs.json", [asdict(job) | {"url": job.url} for job in jobs])
-                    if args.command == "plan":
-                        return 0
-                    for job in jobs:
-                        if time.monotonic() > deadline:
-                            break
-                        if config.get("max_per_day") is not None and ledger.count_today() >= config["max_per_day"]:
-                            summary["stop_reason"] = "Cota local atingida"
-                            break
-                        # A fresh tab prevents carrying a partially filled modal into the next application.
-                        application_page = context.new_page()
-                        try:
-                            summary["phase"] = "apply:" + job.id
-                            fresh_job = read_job(application_page, job.id)
-                            if not eligible(fresh_job):
-                                continue
-                            status, pending = apply(application_page, fresh_job, config, ledger)
-                            if status not in {"submitted", "already_applied"}:
-                                ledger.record(job, status, "; ".join(pending))
-                            summary["results"].append({"id": job.id, "title": job.title, "company": job.company, "status": status, "url": job.url})
-                            if pending:
-                                summary["pending"].append({"job_id": job.id, "url": job.url, "questions": pending})
-                            summary["submitted"] += status == "submitted"
-                            # Checkpoint even if the process later crashes.
-                            save_json(ROOT / "data/last-run.json", summary)
-                            if status == "submitted":
-                                application_page.wait_for_timeout(max(0, config.get("seconds_between_applications", 30)) * 1000)
-                        finally:
-                            application_page.close()
+                    # Keep part of the run available for applications, even with slow ads.
+                    search_deadline = started + duration * 0.25 if args.command == "run" else deadline
+                    ids = args.job_id or collect(page, config, search_deadline, summary["search_issues"])
+                    summary["discovered"] = len(ids)
+                    checkpoint(summary)
+                    read_deadline = started + duration * 0.70 if args.command == "run" else deadline
+                    jobs = scan_jobs(page, ids, ledger, summary, read_deadline)
+                    if args.command == "run":
+                        send_applications(context, jobs, config, ledger, summary, deadline)
+                    if not jobs and (any(issue["kind"] == "read_error" for issue in summary["read_issues"]) or summary["search_issues"]) and not summary["excluded"] and not summary["skipped_registered"] and not summary["skipped_unavailable"]:
+                        summary.update(status="error", stop_reason="Nenhuma vaga pode ser classificada; consulte os problemas de leitura/pesquisa no relatorio")
+                        return 1
                 finally:
                     context.close()
     except StopRun as e:
@@ -444,15 +599,22 @@ def main():
         if ledger and ("Limite ou pausa" in str(e) or "Verificacao de seguranca" in str(e) or "CAPTCHA" in str(e)):
             ledger.pause(str(e))
         return 2
+    except BudgetReached:
+        summary.update(status="partial", finish_reason="Tempo maximo da execucao atingido")
+        return 0
     except Exception as e:
         # Log exception class only: browser exceptions can embed personal form values.
         summary.update(status="error", stop_reason=f"{type(e).__name__} ({summary.get('phase', 'startup')}): layout, sessao ou rede precisa de revisao local")
         return 1
     finally:
         if args.command != "check":
-            save_json(ROOT / "data/last-run.json", summary)
+            if summary["status"] == "running":
+                summary["status"] = "partial" if any(summary[k] for k in ("read_issues", "search_issues", "pending")) or summary.get("finish_reason") else "ok"
+            if owns_report:
+                checkpoint(summary)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            save_json(ROOT / f"data/reports/{stamp}-{args.command}.json", summary)
+            if owns_report:
+                save_json(ROOT / f"data/reports/{stamp}-{args.command}.json", summary)
             if ledger:
                 ledger.close()
             print(json.dumps({k: summary[k] for k in ["status", "submitted", "candidates"]} | {"reason": summary.get("stop_reason", "")}, ensure_ascii=False), flush=True)

@@ -36,9 +36,11 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual(resume_language(job(description="Você trabalhará com nossa equipe para desenvolver jogos.")), "pt")
 
     def test_answers_never_guess(self):
-        config = {"contact": {"email": "example@example.com"}, "answers": {"País": "Brasil"}}
+        config = {"contact": {"email": "example@example.com", "phone": "41999999999"}, "answers": {"País": "Brasil"}}
         self.assertEqual(answer_for("Email address *", config), "example@example.com")
         self.assertEqual(answer_for("País", config), "Brasil")
+        self.assertEqual(answer_for("Número de celular*", config), "41999999999")
+        self.assertEqual(answer_for("Phone*", config), "41999999999")
         for question in ["Pretensão salarial", "Years of C# experience", "Are you authorized to work in Brazil?", "E-mail do responsável", "Senha"]:
             self.assertIsNone(answer_for(question, config))
 

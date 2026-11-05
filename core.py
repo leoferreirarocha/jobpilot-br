@@ -110,13 +110,19 @@ def answer_for(label: str, config: dict) -> str | None:
         "email": "email", "email address": "email", "endereco de email": "email", "e-mail": "email",
         "mobile phone number": "phone", "phone number": "phone", "numero de telefone": "phone",
         "telefone celular": "phone", "numero de telefone celular": "phone", "celular": "phone",
+        "numero de celular": "phone", "telefone": "phone", "mobile number": "phone", "phone": "phone",
         "codigo do pais": "phone_country", "country/region code": "phone_country",
         "first name": "first_name", "nome": "first_name", "last name": "last_name", "sobrenome": "last_name",
-        "linkedin profile": "linkedin", "perfil do linkedin": "linkedin",
+        "linkedin profile": "linkedin", "perfil do linkedin": "linkedin", "linkedin": "linkedin",
         "github": "github", "portfolio": "portfolio",
         "current location": "location", "what is your current location?": "location",
         "localizacao atual": "location", "qual e a sua localizacao atual?": "location",
     }
+    if key in {"full name", "nome completo"}:
+        value = contact.get("full_name") or " ".join(contact.get(part, "") for part in ("first_name", "last_name")).strip()
+        return value or None
+    if key == "how did you hear about this job?":
+        return "LinkedIn"
     value = contact.get(fields.get(key, ""))
     return str(value) if value else None
 
@@ -151,8 +157,11 @@ class Ledger:
         return datetime.now(timezone.utc).date().isoformat()
 
     def protected(self, job_id: str) -> bool:
+        return self.status(job_id) in {"submitting", "submitted", "uncertain", "already_applied"}
+
+    def status(self, job_id: str) -> str | None:
         row = self.db.execute("SELECT status FROM applications WHERE job_id=?", (job_id,)).fetchone()
-        return bool(row and row[0] in {"submitting", "submitted", "uncertain", "already_applied"})
+        return row[0] if row else None
 
     def count_today(self) -> int:
         return self.db.execute("SELECT COUNT(*) FROM applications WHERE submit_day=?", (self.day(),)).fetchone()[0]
