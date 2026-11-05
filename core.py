@@ -75,7 +75,8 @@ def rank(job: Job) -> Job:
     if re.search(r"junior|\bjr\b|trainee|estagio|intern|assistente|auxiliar|entry.level", title):
         score += 20
         reasons.append("entrada/junior")
-    if re.search(r"senior|\bsr\b|pleno|especialista|coordenador|gerente|principal|staff|lead", title):
+    explicit_junior = re.search(r"junior|\bjr\b|trainee|estagio|intern|entry.level", title)
+    if re.search(r"senior|\bsr\b|pleno|especialista|coordenador|gerente|principal|staff|lead", title) and not explicit_junior:
         score -= 65
         reasons.append("senioridade acima do curriculo")
     for skill in ["c#", "gdscript", "unity", "godot", "git", "python", "java", "ingles", "english"]:
@@ -114,6 +115,16 @@ def answer_for(label: str, config: dict) -> str | None:
     explicit = {norm(k).rstrip(" *:"): str(v) for k, v in config.get("answers", {}).items()}
     if key in explicit:
         return explicit[key]
+    # The user may supply different monthly targets for the two Brazilian regimes.
+    # An ambiguous regime, historical salary, or different period must stay blank.
+    salary_question = re.search(r"pretens|expectativ|expected salary|salary expectation", key) and re.search(r"salar", key)
+    unsupported_period = re.search(r"ultimo|ultima|previous|last salary|anual|annual|year|hora|hour|diari|daily|liquido|\bnet\b", key)
+    if salary_question and not unsupported_period:
+        clt, pj = bool(re.search(r"\bclt\b", key)), bool(re.search(r"\bpj\b", key))
+        if clt != pj:
+            value = config.get("salary_expectations", {}).get("clt" if clt else "pj")
+            if value is not None:
+                return str(value)
     contact = config.get("contact", {})
     fields = {
         "email": "email", "email address": "email", "endereco de email": "email", "e-mail": "email",

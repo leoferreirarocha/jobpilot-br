@@ -4,7 +4,7 @@
 # Do not depend on impression-only data-view-name attributes or generated CSS classes.
 JOB_READY_JS = r"""() => {
   const text = document.body?.innerText || '';
-  if (/nenhuma vaga|vaga não (está mais )?disponível|no longer available|page not found|página não encontrada/i.test(text.slice(0,2500))) return true;
+  if (/nenhuma vaga|vaga não (está mais )?disponível|não aceita candidaturas agora|no longer available|page not found|página não encontrada/i.test(text.slice(0,2500))) return true;
   if (document.querySelector('#job-details, .jobs-description__content, .jobs-description-content__text')) return true;
   return [...document.querySelectorAll('h2,h3')].some(el => /^(Sobre a vaga|About the job)$/i.test(el.innerText.trim()));
 }"""
@@ -19,24 +19,28 @@ JOB_SNAPSHOT_JS = r"""applySelector => {
   if (h1) title = clean(h1.innerText);
   let titleNode = title ? [...document.querySelectorAll('h1,p,a')].find(el=>clean(el.innerText)===title) : null;
   const apply = document.querySelector(applySelector);
+  const about=[...document.querySelectorAll('h2,h3')].find(el=>/^(Sobre a vaga|About the job)$/i.test(clean(el.innerText)));
+  const modePattern=/^(Remoto|Remote|Híbrido|Hybrid|Presencial|On.?site)$/i;
   let top = null;
   for (let el=(apply || titleNode); el && el!==document.body; el=el.parentElement) {
+    if(about && el.contains(about)) break;
     const paras=[...el.querySelectorAll('p')].map(p=>clean(p.innerText)).filter(Boolean);
     const link=el.querySelector('a[href*="/company/"]');
     if (!title && link && paras.length >= 3) {
       company=clean(link.innerText);title=paras.find(text=>text!==company)||'';
       titleNode=[...el.querySelectorAll('p,h1')].find(p=>clean(p.innerText)===title);
     }
-    if (titleNode && el.contains(titleNode) && paras.some(text=>text.includes('·'))) {top=el;break;}
+    if (titleNode && el.contains(titleNode) && paras.some(text=>text.includes('·'))) {
+      if(!top) top=el;
+      if([...el.querySelectorAll('a,button,span')].some(node=>modePattern.test(clean(node.innerText)))) {top=el;break;}
+    }
   }
   const paras=top ? [...top.querySelectorAll('p')].map(p=>clean(p.innerText)).filter(Boolean) : [];
   const titleIndex=paras.indexOf(title);
   if (!company && titleIndex>0) company=paras[titleIndex-1];
   const location=(paras.slice(Math.max(0,titleIndex+1)).find(text=>text.includes('·'))||'').split('·')[0].trim();
-  const modePattern=/^(Remoto|Remote|Híbrido|Hybrid|Presencial|On.?site)$/i;
-  const modes=top ? [...top.querySelectorAll('a,button')].map(el=>clean(el.innerText)).filter(text=>modePattern.test(text)) : [];
+  const modes=top ? [...new Set([...top.querySelectorAll('a,button,span')].map(el=>clean(el.innerText)).filter(text=>modePattern.test(text)))] : [];
   let description='';
-  const about=[...document.querySelectorAll('h2,h3')].find(el=>/^(Sobre a vaga|About the job)$/i.test(clean(el.innerText)));
   if (about) {
     for (let el=about.parentElement, n=0; el && el!==document.body && n<4; el=el.parentElement,n++) {
       const content=el.querySelector('[data-testid="expandable-text-box"]');
@@ -44,5 +48,5 @@ JOB_SNAPSHOT_JS = r"""applySelector => {
     }
   }
   return {title,company,location,workplace:modes.join(' '),description,pay:top?.innerText||'',prefix,
-    unavailable:!apply && /não (se )?aceita(m)? mais candidaturas|no longer accepting applications|vaga não (está mais )?disponível|no longer available|page not found|página não encontrada/i.test(prefix)};
+    unavailable:!apply && /não aceita candidaturas agora|não (se )?aceita(m)? mais candidaturas|no longer accepting applications|vaga não (está mais )?disponível|no longer available|page not found|página não encontrada/i.test(prefix)};
 }"""

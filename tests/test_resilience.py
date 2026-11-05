@@ -280,6 +280,45 @@ class ResilienceTests(unittest.TestCase):
         with self.assertRaises(jobpilot.StopRun):
             jobpilot.guard(self.page)
 
+    def test_easy_apply_link_preserves_mode_and_opens_native_form(self):
+        action='<a href="#" aria-label="Usar a candidatura simplificada para esta vaga" onclick="document.querySelector(\'[role=dialog]\').hidden=false;return false">Candidatura simplificada</a>'
+        html=MODERN.replace('<button aria-label="Usar a candidatura simplificada para esta vaga">Candidatura simplificada</button>',action)
+        html+='<div role="dialog"'+LEGACY_FORM.split('<div role="dialog"',1)[1]
+        self.page.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
+        job=jobpilot.read_job(self.page,"123")
+        self.assertEqual(job.workplace,"Presencial")
+        self.assertEqual(jobpilot.apply(self.page,job,self.config,self.ledger),("submitted",[]))
+
+    def test_missing_workplace_is_review_not_geography_rejection(self):
+        html=MODERN.replace('<a href="#">Presencial</a>','')
+        self.page.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
+        with self.assertRaisesRegex(jobpilot.Review,"modalidade"):
+            jobpilot.read_job(self.page,"123")
+
+    def test_closed_now_message_skips_ad(self):
+        html=MODERN.replace('<button aria-label="Usar a candidatura simplificada para esta vaga">Candidatura simplificada</button>','<p>Não aceita candidaturas agora</p>')
+        self.page.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
+        with self.assertRaises(jobpilot.Unavailable):
+            jobpilot.read_job(self.page,"123")
+
+    def test_fresh_geography_rejection_is_reported(self):
+        html=MODERN.replace('Curitiba, Paraná, Brasil','São Paulo, São Paulo, Brasil')
+        self.context.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
+        job=Job("123","Dev","Empresa","Curitiba, Brasil","Presencial","C#")
+        report=summary()
+        jobpilot.send_applications(self.context,[job],self.config,self.ledger,report,time.monotonic()+20)
+        self.assertEqual(report["results"][0]["status"],"outside_scope")
+        self.assertIn("São Paulo",report["results"][0]["location"])
+        self.assertEqual(report["excluded"],1)
+
+    def test_external_apply_link_is_not_opened(self):
+        action='<a href="#" data-view-name="job-apply-button" aria-label="Candidatar-se no site da empresa" onclick="window.externalOpened=true">Candidatar-se</a>'
+        html=MODERN.replace('<button aria-label="Usar a candidatura simplificada para esta vaga">Candidatura simplificada</button>',action)
+        self.page.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
+        job=jobpilot.read_job(self.page,"123")
+        self.assertEqual(jobpilot.apply(self.page,job,self.config,self.ledger),("not_easy_apply",[]))
+        self.assertFalse(self.page.evaluate("!!window.externalOpened"))
+
 
 if __name__ == "__main__":
     unittest.main()

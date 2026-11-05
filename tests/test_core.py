@@ -31,6 +31,11 @@ class MatchingTests(unittest.TestCase):
         senior = rank(job(title="Senior C# Developer", salary_text="R$ 15.000 /mês"))
         self.assertGreater(junior.score, senior.score)
 
+    def test_mixed_junior_seniority_range_keeps_junior_priority(self):
+        mixed=rank(job(title="Suporte técnico Junior/Pleno (Bilingue)"))
+        general=rank(job(title="Assistente administrativo"))
+        self.assertGreater(mixed.score,general.score)
+
     def test_resume_language(self):
         self.assertEqual(resume_language(job(description="You will work with our team. The requirements include experience with C#. Your responsibilities include testing.")), "en")
         self.assertEqual(resume_language(job(description="Você trabalhará com nossa equipe para desenvolver jogos.")), "pt")
@@ -56,6 +61,16 @@ class MatchingTests(unittest.TestCase):
         restricted=job(title="Desenvolvedor Junior - PCD")
         self.assertIsNotNone(eligibility_review(restricted,{}))
         self.assertIsNone(eligibility_review(restricted,{"reviewed_eligibility_job_ids":["123"]}))
+
+    def test_salary_targets_require_clear_regime_and_monthly_expectation(self):
+        config={"salary_expectations":{"clt":2500,"pj":3500}}
+        self.assertEqual(answer_for("Qual sua pretensão salarial CLT?",config),"2500")
+        self.assertEqual(answer_for("Qual sua expectativa salarial mensal PJ?",config),"3500")
+        self.assertEqual(answer_for("Expected salary for CLT",config),"2500")
+        for question in ["Qual sua pretensão salarial?","Qual seu último salário CLT?","Pretensão salarial anual PJ","Pretensão salarial por hora PJ","Pretensão salarial CLT ou PJ"]:
+            self.assertIsNone(answer_for(question,config))
+        config["answers"]={"Qual sua pretensão salarial CLT?":"2800"}
+        self.assertEqual(answer_for("Qual sua pretensão salarial CLT?",config),"2800")
 
 
 class LedgerTests(unittest.TestCase):

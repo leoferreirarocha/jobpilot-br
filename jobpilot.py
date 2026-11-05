@@ -18,7 +18,7 @@ from core import Job, Ledger, answer_for, eligible, eligibility_review, norm, ra
 from page_reader import JOB_READY_JS, JOB_SNAPSHOT_JS
 
 ROOT = Path(__file__).resolve().parent
-APPLY_SELECTOR = '[data-view-name="job-apply-button"], button[aria-label*="simplificada"], button[aria-label*="Easy Apply"]'
+APPLY_SELECTOR = '[data-view-name="job-apply-button"], button[aria-label*="simplificada" i], button[aria-label*="Easy Apply" i], a[aria-label*="simplificada" i], a[aria-label*="Easy Apply" i]'
 STEP_SIGNATURE_JS = r"""el => JSON.stringify({
     page:(el.innerText.match(/\b\d+\s+(?:de|of)\s+\d+/i)||[])[0]||'',
     fields:[...el.querySelectorAll('input,textarea,select,[role="checkbox"],[role="radio"]')].map(field=>
@@ -271,6 +271,8 @@ def parse_job(page, job_id):
     salary_source = snapshot["pay"] or workplace
     if not title or not description:
         raise Review("Layout da vaga nao reconhecido; descricao ou titulo ausente.")
+    if not location or not workplace:
+        raise Review("Localidade ou modalidade nao confirmada no cabecalho; nao classificar como fora da regiao")
     salary = " ".join(line for line in (salary_source + "\n" + description).splitlines()
                       if "R$" in line and re.search(r"mes\b|mensal|mensais|month|/mo\b", norm(line)))
     return rank(Job(job_id, title, company, location, workplace, description, salary))
@@ -407,7 +409,12 @@ def apply(page, job, config, ledger):
     if re.search(r"\b(application submitted|candidatura enviada|ja se candidatou|already applied)\b", norm(page.locator("body").inner_text())):
         ledger.record(job, "already_applied")
         return "already_applied", []
-    button = visible_button(page, r"Candidatura simplificada|Easy Apply")
+    button = None
+    for action in page.locator(APPLY_SELECTOR).all():
+        if action.is_visible() and re.search(r"Candidatura simplificada|Easy Apply", action.inner_text() + " " + (action.get_attribute("aria-label") or ""), re.I):
+            button = action
+            break
+    button = button or visible_button(page, r"Candidatura simplificada|Easy Apply")
     if button is None:
         return "not_easy_apply", []
     button.click()
@@ -525,13 +532,16 @@ def send_applications(context, jobs, config, ledger, summary, deadline):
             summary["finish_reason"] = "Cota local atingida"
             break
         page = context.new_page()
+        fresh_job = None
         try:
             summary["phase"] = "apply:" + job.id
+            checkpoint(summary)
             fresh_job = read_job(page, job.id, deadline)
             if not eligible(fresh_job):
                 summary["excluded"] += 1
-                continue
-            status, pending = apply(page, fresh_job, config, ledger)
+                status, pending = "outside_scope", []
+            else:
+                status, pending = apply(page, fresh_job, config, ledger)
         except BudgetReached:
             summary["finish_reason"] = "Tempo maximo da execucao atingido"
             break
@@ -555,7 +565,9 @@ def send_applications(context, jobs, config, ledger, summary, deadline):
                 pass
         if status not in {"submitted", "already_applied"}:
             ledger.record(job, status, "; ".join(pending))
-        summary["results"].append({"id": job.id, "title": job.title, "company": job.company, "status": status, "url": job.url})
+        observed = fresh_job or job
+        summary["results"].append({"id": job.id, "title": job.title, "company": job.company, "status": status, "url": job.url,
+                                   "location": observed.location, "workplace": observed.workplace})
         if pending:
             summary["pending"].append({"job_id": job.id, "url": job.url, "questions": pending})
         summary["submitted"] += status == "submitted"
