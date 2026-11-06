@@ -75,10 +75,7 @@ def rank(job: Job) -> Job:
     if re.search(r"junior|\bjr\b|trainee|estagio|intern|assistente|auxiliar|entry.level", title):
         score += 20
         reasons.append("entrada/junior")
-    explicit_junior = re.search(r"junior|\bjr\b|trainee|estagio|intern|entry.level", title)
-    if re.search(r"senior|\bsr\b|pleno|especialista|coordenador|gerente|principal|staff|lead", title) and not explicit_junior:
-        score -= 65
-        reasons.append("senioridade acima do curriculo")
+    # Higher seniority is permitted; the user wants to reach for stronger roles.
     for skill in ["c#", "gdscript", "unity", "godot", "git", "python", "java", "ingles", "english"]:
         if skill in desc:
             score += 2

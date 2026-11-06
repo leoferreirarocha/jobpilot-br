@@ -16,6 +16,7 @@ from playwright.sync_api import Error as BrowserError, TimeoutError as BrowserTi
 
 from core import Job, Ledger, answer_for, eligible, eligibility_review, norm, rank, resume_language, save_json, search_urls
 from page_reader import JOB_READY_JS, JOB_SNAPSHOT_JS
+from policy import screen_job
 
 ROOT = Path(__file__).resolve().parent
 APPLY_SELECTOR = '[data-view-name="job-apply-button"], button[aria-label*="simplificada" i], button[aria-label*="Easy Apply" i], a[aria-label*="simplificada" i], a[aria-label*="Easy Apply" i]'
@@ -100,6 +101,13 @@ def load_config():
     if not path.exists():
         raise StopRun("Crie config.local.json a partir de config.example.json.")
     config = json.loads(path.read_text(encoding="utf-8-sig"))
+    floors = config.get("minimum_monthly_salary")
+    if not isinstance(floors, dict) or set(floors) != {"clt", "pj"} or any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0 for value in floors.values()
+    ):
+        raise StopRun("Configure minimum_monthly_salary com pisos mensais positivos para clt e pj.")
+    if not isinstance(config.get("allow_undisclosed_salary"), bool):
+        raise StopRun("Defina explicitamente allow_undisclosed_salary como true ou false.")
     cap = config.get("max_per_day")
     if cap is not None and (not isinstance(cap, int) or cap < 1):
         raise StopRun("max_per_day deve ser null ou inteiro positivo.")
@@ -273,8 +281,11 @@ def parse_job(page, job_id):
         raise Review("Layout da vaga nao reconhecido; descricao ou titulo ausente.")
     if not location or not workplace:
         raise Review("Localidade ou modalidade nao confirmada no cabecalho; nao classificar como fora da regiao")
-    salary = " ".join(line for line in (salary_source + "\n" + description).splitlines()
-                      if "R$" in line and re.search(r"mes\b|mensal|mensais|month|/mo\b", norm(line)))
+    # Keep salary lines even without '/mes': the previous reader lost explicit
+    # 'Salario de R$ 2.050,00 + beneficios' entirely.
+    salary = "\n".join(line for line in (salary_source + "\n" + description).splitlines()
+                       if re.search(r"R\$|\bBRL\b|\bUSD\b|\$\s*\d", line, re.I)
+                       or re.search(r"salari|remuner|salary|base pay|valor mensal", norm(line)))
     return rank(Job(job_id, title, company, location, workplace, description, salary))
 
 
@@ -403,6 +414,9 @@ def confirm_submission_by_status(page, job):
 
 
 def apply(page, job, config, ledger):
+    decision = screen_job(job, config)
+    if decision.status != "accepted":
+        return ("outside_scope" if decision.status == "excluded" else "needs_review"), decision.reasons
     requirement = eligibility_review(job, config)
     if requirement:
         return "needs_review", [requirement]
@@ -444,6 +458,10 @@ def apply(page, job, config, ledger):
         if submit:
             if not upload_seen:
                 return "needs_review", ["Nao foi possivel confirmar o anexo do curriculo nesta candidatura"]
+            # Defense in depth: no direct caller or ranking score can bypass policy.
+            decision = screen_job(job, config)
+            if decision.status != "accepted":
+                return ("outside_scope" if decision.status == "excluded" else "needs_review"), decision.reasons
             if not ledger.reserve(job, config.get("max_per_day")):
                 raise StopRun("Cota local atingida, pausa ativa ou candidatura ja registrada.")
             try:
@@ -488,7 +506,22 @@ def checkpoint(summary, jobs=None):
         save_json(ROOT / "data/ranked-jobs.json", [asdict(job) | {"url": job.url} for job in sorted(jobs, key=lambda j: (-j.score, j.id))])
 
 
-def scan_jobs(page, ids, ledger, summary, deadline):
+def archive_job(job):
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    save_json(ROOT / f"data/job-snapshots/{job.id}-{stamp}.json", asdict(job) | {"url": job.url})
+
+
+def record_screening(summary, job, decision):
+    entry = {"job_id": job.id, "title": job.title, "company": job.company,
+             "url": job.url, "reasons": decision.reasons}
+    if decision.status == "excluded":
+        summary["excluded"] += 1
+        summary.setdefault("policy_exclusions", []).append(entry)
+    elif decision.status == "review":
+        summary.setdefault("policy_reviews", []).append(entry)
+
+
+def scan_jobs(page, ids, ledger, summary, deadline, config=None):
     jobs = []
     for job_id in ids:
         if time.monotonic() >= deadline:
@@ -502,11 +535,13 @@ def scan_jobs(page, ids, ledger, summary, deadline):
         summary["phase"] = "read_job:" + job_id
         try:
             job = read_job(page, job_id, deadline)
-            if eligible(job):
+            archive_job(job)
+            decision = screen_job(job, config or {})
+            if decision.status == "accepted":
                 jobs.append(job)
                 summary["candidates"] = len(jobs)
             else:
-                summary["excluded"] += 1
+                record_screening(summary, job, decision)
         except BudgetReached:
             summary["finish_reason"] = "Tempo reservado para leitura encerrado"
             break
@@ -537,9 +572,11 @@ def send_applications(context, jobs, config, ledger, summary, deadline):
             summary["phase"] = "apply:" + job.id
             checkpoint(summary)
             fresh_job = read_job(page, job.id, deadline)
-            if not eligible(fresh_job):
-                summary["excluded"] += 1
-                status, pending = "outside_scope", []
+            archive_job(fresh_job)
+            decision = screen_job(fresh_job, config)
+            if decision.status != "accepted":
+                record_screening(summary, fresh_job, decision)
+                status, pending = ("outside_scope" if decision.status == "excluded" else "needs_review"), decision.reasons
             else:
                 status, pending = apply(page, fresh_job, config, ledger)
         except BudgetReached:
@@ -587,7 +624,7 @@ def main():
     summary = {"at": Ledger.now(), "mode": args.command, "submitted": 0, "candidates": 0,
                "discovered": 0, "scanned": 0, "excluded": 0, "skipped_registered": 0,
                "skipped_unavailable": 0, "read_issues": [], "search_issues": [],
-               "pending": [], "results": [], "status": "running"}
+               "pending": [], "results": [], "policy_reviews": [], "policy_exclusions": [], "status": "running"}
     ledger = None
     owns_report = False
     try:
@@ -639,10 +676,10 @@ def main():
                     summary["discovered"] = len(ids)
                     checkpoint(summary)
                     read_deadline = started + duration * 0.70 if args.command == "run" else deadline
-                    jobs = scan_jobs(page, ids, ledger, summary, read_deadline)
+                    jobs = scan_jobs(page, ids, ledger, summary, read_deadline, config=config)
                     if args.command == "run":
                         send_applications(context, jobs, config, ledger, summary, deadline)
-                    if not jobs and (any(issue["kind"] == "read_error" for issue in summary["read_issues"]) or summary["search_issues"]) and not summary["excluded"] and not summary["skipped_registered"] and not summary["skipped_unavailable"]:
+                    if not jobs and (any(issue["kind"] == "read_error" for issue in summary["read_issues"]) or summary["search_issues"]) and not summary["excluded"] and not summary["skipped_registered"] and not summary["skipped_unavailable"] and not summary["policy_reviews"]:
                         summary.update(status="error", stop_reason="Nenhuma vaga pode ser classificada; consulte os problemas de leitura/pesquisa no relatorio")
                         return 1
                 finally:
@@ -662,7 +699,7 @@ def main():
     finally:
         if args.command != "check":
             if summary["status"] == "running":
-                summary["status"] = "partial" if any(summary[k] for k in ("read_issues", "search_issues", "pending")) or summary.get("finish_reason") else "ok"
+                summary["status"] = "partial" if any(summary[k] for k in ("read_issues", "search_issues", "pending", "policy_reviews")) or summary.get("finish_reason") else "ok"
             if owns_report:
                 checkpoint(summary)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")

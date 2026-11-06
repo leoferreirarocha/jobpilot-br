@@ -41,8 +41,10 @@ class BrowserTests(unittest.TestCase):
         self.resume = Path(self.temp.name) / "resume.pdf"
         self.resume.write_bytes(b"%PDF-1.4\n%fixture only")
         self.config = {"contact": {"email": "correct@example.com", "phone": "41999999999"},
+                       "allow_undisclosed_salary": True,
+                       "minimum_monthly_salary": {"clt": 2500, "pj": 3500},
                        "resumes": {"pt": str(self.resume), "en": str(self.resume)}}
-        self.job = Job("123", "Dev", "Empresa", "Curitiba, Brasil", "Híbrido", "Descrição")
+        self.job = Job("123", "Desenvolvedor C# Junior", "Empresa", "Curitiba, Brasil", "Híbrido", "Desenvolvimento de software em C#")
 
     def tearDown(self):
         self.page.close()

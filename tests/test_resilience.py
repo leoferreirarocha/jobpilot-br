@@ -60,7 +60,8 @@ class ResilienceTests(unittest.TestCase):
         self.ledger = Ledger(self.root / "applications.sqlite3")
         self.resume = self.root / "resume.pdf"
         self.resume.write_bytes(b"%PDF-1.4\n%fixture")
-        self.config = {"contact": {"email": "candidate@example.com"}, "resumes": {"en": str(self.resume), "pt": str(self.resume)}, "seconds_between_applications": 0}
+        self.config = {"contact": {"email": "candidate@example.com"}, "resumes": {"en": str(self.resume), "pt": str(self.resume)}, "seconds_between_applications": 0, "allow_undisclosed_salary": True}
+        self.config['minimum_monthly_salary'] = {'clt': 2500, 'pj': 3500}
 
     def tearDown(self):
         self.context.close()
@@ -130,10 +131,10 @@ class ResilienceTests(unittest.TestCase):
         def reader(page, job_id, deadline):
             if job_id == "999":
                 raise BrowserTimeout("Injected read timeout")
-            return real_reader(page, job_id, deadline)
+            return Job(job_id, "Desenvolvedor C# Junior", "Empresa", "Curitiba, Brasil", "Híbrido", "Desenvolvimento em C#")
         report = summary()
         with patch.object(jobpilot, "read_job", side_effect=reader):
-            jobs = jobpilot.scan_jobs(self.page, ["999", "123"], self.ledger, report, time.monotonic()+20)
+            jobs = jobpilot.scan_jobs(self.page, ["999", "123"], self.ledger, report, time.monotonic()+20, config=self.config)
         self.assertEqual([job.id for job in jobs], ["123"])
         self.assertEqual(report["candidates"], 1)
         self.assertEqual(len(report["read_issues"]), 1)
@@ -144,7 +145,7 @@ class ResilienceTests(unittest.TestCase):
         report = summary()
         with patch.object(jobpilot, "read_job", side_effect=[valid, jobpilot.StopRun("Security checkpoint")]):
             with self.assertRaises(jobpilot.StopRun):
-                jobpilot.scan_jobs(self.page, ["123", "456"], self.ledger, report, time.monotonic()+20)
+                jobpilot.scan_jobs(self.page, ["123", "456"], self.ledger, report, time.monotonic()+20, config=self.config)
         self.assertEqual(json.loads((self.root/"data/last-run.json").read_text())["candidates"], 1)
 
     def test_form_timeout_does_not_prevent_next_application(self):
@@ -283,6 +284,7 @@ class ResilienceTests(unittest.TestCase):
     def test_easy_apply_link_preserves_mode_and_opens_native_form(self):
         action='<a href="#" aria-label="Usar a candidatura simplificada para esta vaga" onclick="document.querySelector(\'[role=dialog]\').hidden=false;return false">Candidatura simplificada</a>'
         html=MODERN.replace('<button aria-label="Usar a candidatura simplificada para esta vaga">Candidatura simplificada</button>',action)
+        html=html.replace('Assistente de manutenção','Desenvolvedor C# Junior').replace('Auxiliar na manutenção de equipamentos.','Desenvolvimento de software em C#.')
         html+='<div role="dialog"'+LEGACY_FORM.split('<div role="dialog"',1)[1]
         self.page.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
         job=jobpilot.read_job(self.page,"123")
@@ -311,9 +313,28 @@ class ResilienceTests(unittest.TestCase):
         self.assertIn("São Paulo",report["results"][0]["location"])
         self.assertEqual(report["excluded"],1)
 
+    def test_advertised_salary_without_month_marker_is_preserved_and_blocks(self):
+        html=MODERN.replace('Assistente de manutenção','Desenvolvedor C# Junior').replace('Auxiliar na manutenção de equipamentos.','Desenvolvimento em C#. Salário CLT R$ 2.050,00 + VT + VR.')
+        self.context.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
+        found=jobpilot.read_job(self.page,'123')
+        self.assertIn('2.050,00',found.salary_text)
+        self.assertEqual(jobpilot.apply(None,found,self.config,self.ledger)[0],'outside_scope')
+
+    def test_salary_is_rechecked_before_opening_form(self):
+        html=LEGACY_FORM.replace('Desenvolvimento em C#.','Desenvolvimento em C#. Salário CLT R$ 2.050,00.')
+        self.context.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
+        cached=Job('123','Desenvolvedor C# Junior','Empresa','Curitiba, Brasil','Híbrido','Desenvolvimento C#. Salário CLT R$ 5.000,00')
+        report=summary()
+        with patch.object(jobpilot,'apply',side_effect=AssertionError('Cannot reach form')):
+            jobpilot.send_applications(self.context,[cached],self.config,self.ledger,report,time.monotonic()+20)
+        self.assertEqual(report['results'][0]['status'],'outside_scope')
+        self.assertEqual(report['submitted'],0)
+        self.assertFalse(self.ledger.protected('123'))
+
     def test_external_apply_link_is_not_opened(self):
         action='<a href="#" data-view-name="job-apply-button" aria-label="Candidatar-se no site da empresa" onclick="window.externalOpened=true">Candidatar-se</a>'
         html=MODERN.replace('<button aria-label="Usar a candidatura simplificada para esta vaga">Candidatura simplificada</button>',action)
+        html=html.replace('Assistente de manutenção','Desenvolvedor C# Junior').replace('Auxiliar na manutenção de equipamentos.','Desenvolvimento de software em C#.')
         self.page.route("**/*",lambda r:r.fulfill(content_type="text/html; charset=utf-8",body=html))
         job=jobpilot.read_job(self.page,"123")
         self.assertEqual(jobpilot.apply(self.page,job,self.config,self.ledger),("not_easy_apply",[]))

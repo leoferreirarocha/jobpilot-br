@@ -1,8 +1,8 @@
 # JobPilot BR
 
-Assistente local em Python para buscar, classificar e candidatar-se a vagas com **Candidatura simplificada** no LinkedIn. Aceita vagas presenciais/híbridas em Curitiba e remotas no Brasil. Inclui buscas de desenvolvimento, QA, suporte e funções de entrada mais amplas.
+Assistente local em Python para buscar, classificar e candidatar-se a vagas com **Candidatura simplificada** no LinkedIn. O foco é desenvolvimento de software/jogos, QA de software e suporte de TI: presencial/híbrido em Curitiba ou remoto no Brasil. Vagas genéricas de loja, caixa, vendas, financeiro, administração e qualidade industrial ficam de fora, inclusive quando a empresa atua com tecnologia.
 
-**Estado:** versão com recuperação de falhas por anúncio. Em 5 de novembro de 2026, os quatro anúncios envolvidos na falha do agendamento foram lidos corretamente após a correção. Há 53 testes de regras, formulários e recuperação de falhas. O funcionamento continua dependendo da sessão e do layout atual da conta; não há garantia de envio em todo formulário nem de atingir a cota diária.
+**Estado:** em 6 de novembro de 2026, a seleção foi corrigida após envios fora do foco. As regras de área e salário agora bloqueiam candidaturas, em vez de apenas alterar a ordenação. Há testes de regressão para loja, caixa, salário abaixo do piso, benefícios/comissões, releitura antes de envio e permissão de cargos de maior senioridade. O funcionamento depende da sessão e do layout atual da conta; não há garantia de envio em todo formulário nem de atingir a cota diária.
 
 O LinkedIn [proíbe automação por terceiros](https://www.linkedin.com/help/linkedin/answer/a1341543) e pode restringir contas. [Há limites diários e por velocidade](https://www.linkedin.com/help/linkedin/answer/a8068422), sem número universal publicado. A rotina para diante de limite, CAPTCHA ou verificação de segurança; não usa stealth, proxies, rotação de contas, resolução de CAPTCHA ou tentativa de contornar bloqueios.
 
@@ -25,7 +25,7 @@ Copy-Item config.example.json config.local.json
 New-Item -ItemType Directory -Force resumes
 ```
 
-Coloque seus dois PDFs em `resumes/` e edite `config.local.json`. Verifique os caminhos dos PDFs e seus contatos antes do primeiro envio.
+Coloque seus dois PDFs em `resumes/` e edite `config.local.json`. Defina seus dois pisos mensais positivos em `minimum_monthly_salary` e escolha explicitamente se aceita salário não divulgado. Verifique os caminhos dos PDFs e seus contatos antes do primeiro envio. A configuração de exemplo não permite envio enquanto os pisos estiverem nulos.
 
 ```powershell
 .\.venv\Scripts\python.exe jobpilot.py check
@@ -40,7 +40,11 @@ Para uma verificação curta sem envio, use `jobpilot.py plan --max-candidates 8
 
 As buscas usam os filtros do LinkedIn para candidatura simplificada, últimos sete dias e região/modalidade. A rotina confere também a localização e a modalidade visíveis na vaga. Localização ou modalidade sem confirmação ficam de fora.
 
-A ordenação usa regras transparentes: compatibilidade com C#/Unity/Godot, desenvolvimento, QA e suporte; preferência por vagas júnior; penalidade para cargos sênior; bônus limitado para salário mensal em reais publicado e menções a mentoria/treinamento. Faixas múltiplas que incluem explicitamente júnior, como “Júnior/Pleno”, mantêm a prioridade de entrada. Os bônus são heurísticas, não estimativas salariais nem garantias de crescimento. Salários ausentes, anuais ou por hora não são comparados. Não consulta salários externos.
+Antes de ordenar, `policy.py` confere função, região, salário e requisitos técnicos ainda não confirmados. A função deve ser de software, QA de software ou suporte de informática; palavras como “support”, “QA” ou o nome de uma empresa de tecnologia não bastam. Requisitos técnicos especializados fora dos conhecimentos confirmados ficam para revisão. Estágios e aprendiz são bloqueados; vagas pleno, sênior e acima, inclusive exigências maiores de tempo de experiência, são permitidas sem inventar respostas sobre experiência.
+
+`minimum_monthly_salary` define os pisos individuais de salário fixo mensal em reais para CLT e PJ, na configuração privada. Faixas são comparadas pelo menor valor. Benefícios, comissões e bônus não elevam o salário fixo. Valores explícitos como “Salário R$ 2.050,00 + VT” são lidos mesmo sem a palavra “mensal”. Remuneração por hora/ano, moeda estrangeira, teto sem piso ou regime ambíguo entre os dois pisos exige revisão. Não se faz conversão nem estimativa. `allow_undisclosed_salary: true` permite salário não divulgado, por escolha explícita do usuário, desde que as demais regras sejam atendidas.
+
+A ordenação dos anúncios aprovados usa compatibilidade com C#/Unity/Godot, desenvolvimento, QA e suporte; bônus para entrada/júnior, remuneração mensal publicada e menções a mentoria/treinamento. Não há penalidade por senioridade superior. Os bônus são heurísticas, não estimativas salariais nem garantias de crescimento. Uma pontuação alta nunca supera os bloqueios. Os filtros são repetidos após a releitura da vaga e antes da reserva de envio.
 
 O currículo em inglês é escolhido quando a descrição contém predominância de termos ingleses; nos demais casos usa o português. Ambos devem estar atualizados. O currículo nunca é reescrito e suas qualificações nunca são inventadas.
 
@@ -72,9 +76,9 @@ O tempo da execução é dividido entre busca, leitura e candidaturas, para que 
 
 `config.local.json`, `data/`, `resumes/`, PDFs, logs e `.venv/` são ignorados pelo Git. Não publique esses arquivos. Os relatórios e o banco ficam somente no computador e podem conter perguntas de recrutadores e dados de candidaturas. Não há telemetria ou serviço de IA externo neste programa.
 
-`data/last-run.json` mostra o resultado mais recente; `data/reports/` conserva cada execução; `data/applications.sqlite3` conserva os envios e tentativas incertas para evitar duplicatas.
+`data/last-run.json` mostra o resultado mais recente; `data/reports/` conserva cada execução; `data/applications.sqlite3` conserva os envios e tentativas incertas para evitar duplicatas. Novas leituras completas são preservadas em `data/job-snapshots/` para permitir auditoria futura. As execuções antigas não tinham esse arquivo por anúncio; ausência de descrição antiga não comprova salário nem compatibilidade.
 
-O relatório separa `discovered` (anúncios coletados), `scanned` (anúncios examinados), `candidates` (elegíveis), `excluded` (fora da região/modalidade), `skipped_registered` (já registrados) e `submitted` (envios confirmados). `read_issues` e `search_issues` são diagnósticos de anúncios/pesquisas; `pending` contém perguntas ou formulários para revisão. `status: partial` indica conclusão com itens ignorados ou pendências, sem equivaler automaticamente a uma falha global.
+O relatório separa `discovered` (anúncios coletados), `scanned` (examinados), `candidates` (aprovados pela política para candidatura), `excluded` (reprovados por escopo/salário), `skipped_registered` (já registrados) e `submitted` (envios confirmados). `policy_exclusions` explica os bloqueios; `policy_reviews` explica os anúncios ainda dependentes de revisão. `read_issues` e `search_issues` são diagnósticos por item; `pending` contém perguntas/formulários. `status: partial` indica conclusão com itens ignorados ou pendências, sem equivaler automaticamente a falha global. Relatórios anteriores a 06/11 usavam `candidates` somente para região/modalidade e não devem ser interpretados como prova de compatibilidade.
 
 ## Testes
 
