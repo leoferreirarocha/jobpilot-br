@@ -110,6 +110,11 @@ def personal_answer(label: str, config: dict) -> str | None:
     """Answer only identified questions from explicit, current personal facts."""
     question = norm(label).rstrip(" *:?.")
     employment = config.get("employment") or {}
+    if employment.get("relatives_or_close_contacts_at_employer") is False:
+        if re.match(r"do you have (?:any )?(?:relatives?|family members?|close friends?|acquaintances?)\b", question) and re.search(r"\b(?:work at|working at|employed by)\b", question) and not re.search(r"\bnot\b", question):
+            return "No"
+        if re.match(r"(?:voce )?(?:tem|possui) (?:algum[a]?s? )?(?:parentes?|familiares?|amigos?|conhecidos?)\b", question) and re.search(r"\btrabalh(?:a|am|ando|e|em)\b.*\b(?:empresa|companhia|organizacao)\b", question) and not re.search(r"\bnao\b", question):
+            return "Não"
     if employment.get("currently_employed") is False:
         company_pt = {
             "empresa atual", "empregador atual", "qual sua empresa atual",

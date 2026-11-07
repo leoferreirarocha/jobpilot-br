@@ -100,6 +100,15 @@ class MatchingTests(unittest.TestCase):
         self.assertIsNone(answer_for('Expected salary including benefits',config))
         self.assertIsNone(answer_for('Pretensão salarial incluindo benefícios',config))
 
+    def test_no_relatives_requires_explicit_general_declaration(self):
+        config={'employment':{'relatives_or_close_contacts_at_employer':False}}
+        question='Do you have any relatives (such as parents, siblings), close friends, or acquaintances who currently work at Example?*'
+        self.assertEqual(answer_for(question,config),'No')
+        self.assertEqual(answer_for('Você possui algum parente que trabalha nesta empresa?',config),'Não')
+        self.assertIsNone(answer_for(question,{}))
+        for label in ['Name any relatives who work at Example', 'Do you have any relatives who do not work at Example?', 'Você possui algum parente que não trabalha nesta empresa?', 'Do you require accessibility?', 'Are you eligible to work at Example?']:
+            self.assertIsNone(answer_for(label,config),label)
+
     def test_generic_salary_respects_known_pj_floor(self):
         config={'salary_expectations':{'clt':2500,'pj':3500,'unspecified':3000},'minimum_monthly_salary':{'clt':2500,'pj':3500}}
         self.assertEqual(answer_for('Qual sua pretensão salarial?',config),'3000')
