@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import unicodedata
+from html import unescape
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -104,6 +105,30 @@ def eligibility_review(job: Job, config: dict) -> str | None:
     if re.search(r"\bpcd\b|pessoas? com deficiencia|\bafirmativ[ao]s?\b|\baffirmative\b", norm(job.title)):
         return "Vaga afirmativa ou com requisito especifico de elegibilidade: confirmar pessoalmente antes do envio"
     return None
+
+
+def consent_authorized(label: str, config: dict) -> bool:
+    """Recognize application consents covered by the user's prior authorization."""
+    text = norm(re.sub(r"<[^>]+>", " ", unescape(unescape(label))))
+    policy = config.get("consent") or {}
+    if not re.search(r"\b(?:accept|agree|consent|authorize|aceito|concordo|autorizo)\b", text):
+        return False
+    if re.search(r"\b(?:not|nao)\b|salary|salari|pagamento|payment|fees|cobranca|contrato de trabalho|employment contract", text):
+        return False
+    if re.search(r"personal data|dados pessoais", text):
+        return policy.get("accept_personal_data_processing") is True
+    if re.search(r"\bterms\b|\btermos\b|privacy policy|politica de privacidade", text):
+        return policy.get("accept_recruitment_terms") is True
+    if re.search(r"oportunidades de emprego|job opportunities|employment opportunities", text):
+        return policy.get("accept_job_opportunity_contact") is True
+    return False
+
+
+def positive_consent_option(text: str) -> bool:
+    key = norm(text).rstrip(" .:*")
+    if re.search(r"\b(?:not|nao|decline|disagree)\b|don't", key):
+        return False
+    return key in {"yes", "sim", "accept", "agree", "aceito", "concordo", "i agree", "i accept"} or bool(re.match(r"(?:i (?:have read and accept|accept|agree|consent|authorize)|li e (?:aceito|concordo)|aceito|concordo|autorizo)\b", key))
 
 
 def personal_answer(label: str, config: dict) -> str | None:

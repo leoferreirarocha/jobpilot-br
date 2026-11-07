@@ -108,6 +108,41 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("Aceito os termos", pending)
         self.assertFalse(self.page.locator("input[type=checkbox]").is_checked())
 
+    def test_authorized_consents_and_current_empty_label_layout(self):
+        from jobpilot import fill_step
+        self.config['consent']={'accept_recruitment_terms':True,'accept_personal_data_processing':True,'accept_job_opportunity_contact':True}
+        self.page.locator('form').evaluate('''el=>el.insertAdjacentHTML('afterbegin',
+            '<div componentkey="auto-component-fixture"><div><input id=data type=checkbox><label for=data></label></div><p>&lt;div&gt;Concordo que meus dados pessoais sejam armazenados e processados para recrutamento.&lt;/div&gt;</p></div>' +
+            '<label>Autorizo contato sobre novas oportunidades de emprego<input id=contact type=checkbox></label>' +
+            '<label>I agree to the terms<select id=consent><option value="">Select</option><option value=no>No</option><option value=yes>I have read and accept the terms.</option></select></label>' +
+            '<fieldset><legend>I consent to processing my personal data</legend><label>Yes<input id=agree type=radio name=terms></label><label>No<input id=decline type=radio name=terms></label></fieldset>')''')
+        self.page.get_by_role('button',name='Candidatura simplificada',exact=True).click()
+        for _ in range(2):
+            self.assertEqual(fill_step(self.page.get_by_role('dialog'),self.config,self.resume),[])
+            self.assertTrue(self.page.locator('#data').is_checked())
+            self.assertTrue(self.page.locator('#contact').is_checked())
+            self.assertEqual(self.page.locator('#consent').input_value(),'yes')
+            self.assertTrue(self.page.locator('#agree').is_checked())
+            self.assertFalse(self.page.locator('#decline').is_checked())
+        self.assertIsNone(self.page.evaluate('window.sends'))
+
+    def test_consent_authorization_does_not_answer_personal_declaration(self):
+        self.config['consent']={'accept_recruitment_terms':True,'accept_personal_data_processing':True,'accept_job_opportunity_contact':True}
+        self.page.locator('form').evaluate('''el=>el.insertAdjacentHTML('afterbegin','<label>Sou PCD<input id=pcd type=checkbox required></label>')''')
+        status,pending=apply(self.page,self.job,self.config,self.ledger)
+        self.assertEqual(status,'needs_review')
+        self.assertIn('Sou PCD',pending)
+        self.assertFalse(self.page.locator('#pcd').is_checked())
+        self.assertIsNone(self.page.evaluate('window.sends'))
+
+    def test_multiple_positive_consent_options_remain_pending(self):
+        from jobpilot import fill_step
+        self.config['consent']={'accept_recruitment_terms':True}
+        self.page.locator('form').evaluate('''el=>el.insertAdjacentHTML('afterbegin','<label>I agree to the terms<select id=consent required><option value="">Select</option><option value=a>I accept terms A</option><option value=b>I accept terms B</option></select></label>')''')
+        self.page.get_by_role('button',name='Candidatura simplificada',exact=True).click()
+        self.assertIn('I agree to the terms',fill_step(self.page.get_by_role('dialog'),self.config,self.resume))
+        self.assertEqual(self.page.locator('#consent').input_value(),'')
+
     def test_multi_step_form_upload_and_contacts(self):
         self.page.set_content('''<button onclick="document.querySelector('[role=dialog]').hidden=false">Candidatura simplificada</button>
         <div role=dialog hidden><form onsubmit="return false">

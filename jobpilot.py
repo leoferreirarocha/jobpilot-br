@@ -14,7 +14,7 @@ from pathlib import Path
 
 from playwright.sync_api import Error as BrowserError, TimeoutError as BrowserTimeout
 
-from core import Job, Ledger, answer_for, eligible, eligibility_review, norm, rank, resume_language, save_json, search_urls
+from core import Job, Ledger, answer_for, consent_authorized, eligible, eligibility_review, norm, positive_consent_option, rank, resume_language, save_json, search_urls
 from page_reader import JOB_READY_JS, JOB_SNAPSHOT_JS
 from policy import salary_evidence, screen_job
 
@@ -298,7 +298,15 @@ def label_of(field):
         copy.querySelectorAll('input,select,textarea,button').forEach(child=>child.remove());
         return copy.textContent;
       }).join(' ').trim() : '';
-      return labels || el.getAttribute('aria-label') || ids.map(id=>root.getElementById?.(id)?.innerText||'').join(' ').trim() || '';
+      const named=labels || el.getAttribute('aria-label') || ids.map(id=>root.getElementById?.(id)?.innerText||'').join(' ').trim();
+      if(named) return named;
+      // Current employer consent rows have an empty label and an adjacent paragraph.
+      if(['checkbox','radio'].includes(el.type)) {
+        const row=el.closest('[componentkey^="auto-component-"]');
+        if(row && row.querySelectorAll('input,textarea,select,[role="checkbox"],[role="radio"]').length===1)
+          return [...row.children].filter(x=>x.tagName==='P').map(x=>x.textContent).join(' ').trim();
+      }
+      return '';
     }""")
 
 
@@ -338,13 +346,29 @@ def fill_step(dialog, config, resume: Path, selected_resume=False, contract_regi
                 if checked:
                     (field if field.is_visible() else visible_labels[0]).click()
                 continue
-            # No consent, demographic, or other checkbox is silently accepted.
+            consent_label = label
+            if kind == "radio":
+                group_label = field.evaluate("el=>{const g=el.closest('fieldset,[role=radiogroup]');return g?.querySelector('legend')?.innerText||g?.getAttribute('aria-label')||''}")
+                consent_label = group_label or label
+            if consent_authorized(consent_label, config):
+                if kind == "checkbox" or positive_consent_option(label):
+                    checked = field.is_checked() if field.evaluate("el=>el.tagName") == "INPUT" else field.get_attribute("aria-checked") == "true"
+                    if not checked:
+                        (field if field.is_visible() else visible_labels[0]).click()
+                    continue
+                if kind == "radio" and norm(label) in {"no", "nao", "i disagree", "decline", "nao aceito"}:
+                    continue
+            # Other consents and personal declarations still need a known response.
             pending.append(label or "Checkbox/radio sem identificacao")
             continue
         if not label:
             pending.append("Campo sem rotulo reconhecivel")
             continue
         answer = answer_for(label, config, contract_regime=contract_regime)
+        if answer is None and field.evaluate("el=>el.tagName") == "SELECT" and consent_authorized(label, config):
+            choices = [o.inner_text() for o in field.locator("option").all() if positive_consent_option(o.inner_text())]
+            if len(choices) == 1:
+                answer = choices[0]
         if answer is None:
             required = "*" in label or field.evaluate("el=>!!el.required || el.getAttribute('aria-required')==='true' || el.getAttribute('aria-invalid')==='true'")
             if not required and not field.input_value().strip():

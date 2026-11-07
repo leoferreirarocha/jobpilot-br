@@ -15,6 +15,7 @@
   "answers": {},
   "salary_expectations": { "clt": null, "pj": null, "unspecified": null },
   "employment": { "currently_employed": null, "relatives_or_close_contacts_at_employer": null },
+  "consent": { "accept_recruitment_terms": false, "accept_personal_data_processing": false, "accept_job_opportunity_contact": false },
   "availability": { "hours_per_day": null, "weekdays": [], "work_modes": [], "onsite_city": null },
   "minimum_monthly_salary": { "clt": null, "pj": null },
   "allow_undisclosed_salary": true,

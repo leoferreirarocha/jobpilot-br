@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import Job, Ledger, answer_for, eligible, eligibility_review, monthly_salary, rank, resume_language, search_urls
+from core import Job, Ledger, answer_for, consent_authorized, eligible, eligibility_review, monthly_salary, positive_consent_option, rank, resume_language, search_urls
 
 
 def job(**kwargs):
@@ -108,6 +108,17 @@ class MatchingTests(unittest.TestCase):
         self.assertIsNone(answer_for(question,{}))
         for label in ['Name any relatives who work at Example', 'Do you have any relatives who do not work at Example?', 'Você possui algum parente que não trabalha nesta empresa?', 'Do you require accessibility?', 'Are you eligible to work at Example?']:
             self.assertIsNone(answer_for(label,config),label)
+
+    def test_consent_requires_authorization_for_its_scope(self):
+        policy={'consent':{'accept_recruitment_terms':True,'accept_personal_data_processing':True,'accept_job_opportunity_contact':True}}
+        for label in ['Aceito os termos', 'I agree to processing of my personal data', 'Autorizo contato sobre oportunidades de emprego']:
+            self.assertTrue(consent_authorized(label,policy),label)
+            self.assertFalse(consent_authorized(label,{}),label)
+        self.assertFalse(consent_authorized('I agree to processing my personal data',{'consent':{'accept_recruitment_terms':True}}))
+        for label in ['I do not accept the terms', 'Aceito os termos do contrato de trabalho', 'Aceito os termos de pagamento', 'Sou PCD', 'Email address']:
+            self.assertFalse(consent_authorized(label,policy),label)
+        self.assertTrue(positive_consent_option('I have read and accept the terms.'))
+        self.assertFalse(positive_consent_option('I do not accept the terms.'))
 
     def test_generic_salary_respects_known_pj_floor(self):
         config={'salary_expectations':{'clt':2500,'pj':3500,'unspecified':3000},'minimum_monthly_salary':{'clt':2500,'pj':3500}}
