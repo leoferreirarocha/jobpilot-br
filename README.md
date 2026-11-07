@@ -18,6 +18,8 @@ A configuração pessoal fica em `config.local.json`, ignorada pelo Git. O agend
 
 Requer Windows, Python 3.12+ e Microsoft Edge instalado. No PowerShell, dentro da pasta do projeto:
 
+Use uma instalação independente do Python registrada no Windows (`py -0p`). Não crie o ambiente com o Python interno de uma versão do Codex: uma atualização do aplicativo pode remover o caminho-base e inutilizar o ambiente. Em 07/11/2026, o ambiente local foi recriado com uma instalação do usuário, preservando a configuração, os currículos, a sessão e o histórico. Os 71 testes passaram com Python 3.14.8 e Playwright 1.64.1.
+
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
