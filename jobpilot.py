@@ -16,7 +16,7 @@ from playwright.sync_api import Error as BrowserError, TimeoutError as BrowserTi
 
 from core import Job, Ledger, answer_for, eligible, eligibility_review, norm, rank, resume_language, save_json, search_urls
 from page_reader import JOB_READY_JS, JOB_SNAPSHOT_JS
-from policy import screen_job
+from policy import salary_evidence, screen_job
 
 ROOT = Path(__file__).resolve().parent
 APPLY_SELECTOR = '[data-view-name="job-apply-button"], button[aria-label*="simplificada" i], button[aria-label*="Easy Apply" i], a[aria-label*="simplificada" i], a[aria-label*="Easy Apply" i]'
@@ -302,7 +302,7 @@ def label_of(field):
     }""")
 
 
-def fill_step(dialog, config, resume: Path, selected_resume=False):
+def fill_step(dialog, config, resume: Path, selected_resume=False, contract_regime=None):
     pending = []
     for field in dialog.locator('input, textarea, select, [role="checkbox"], [role="radio"]').all():
         kind = (field.get_attribute("type") or field.get_attribute("role") or "").lower()
@@ -344,7 +344,7 @@ def fill_step(dialog, config, resume: Path, selected_resume=False):
         if not label:
             pending.append("Campo sem rotulo reconhecivel")
             continue
-        answer = answer_for(label, config)
+        answer = answer_for(label, config, contract_regime=contract_regime)
         if answer is None:
             required = "*" in label or field.evaluate("el=>!!el.required || el.getAttribute('aria-required')==='true' || el.getAttribute('aria-invalid')==='true'")
             if not required and not field.input_value().strip():
@@ -451,7 +451,7 @@ def apply(page, job, config, ledger):
         except Review as e:
             return "needs_review", [str(e)]
         upload_seen |= dialog.locator('input[type="file"]').count() > 0
-        pending = fill_step(dialog, config, resume, selected_resume=upload_seen)
+        pending = fill_step(dialog, config, resume, selected_resume=upload_seen, contract_regime=salary_evidence(job)[2])
         if pending:
             return "needs_review", pending
         submit = visible_button(dialog, r"^(Enviar candidatura|Submit application)$")

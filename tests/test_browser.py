@@ -57,6 +57,31 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate("window.sends"), 1)
         self.assertTrue(self.ledger.protected("123"))
 
+    def test_confirmed_unemployment_and_unspecified_salary_resolve_form(self):
+        from jobpilot import fill_step
+        self.config.update(employment={'currently_employed':False}, salary_expectations={'clt':2500,'pj':3500,'unspecified':3000})
+        self.page.locator('form').evaluate('''el=>el.insertAdjacentHTML('afterbegin',
+            '<label>Confirm the name of the company where you work/ Confirme o nome da empresa em que você trabalha atualmente<input id=company required value="Old employer"></label>' +
+            '<label>Qual sua pretensão salarial?<input id=salary type=number required value=9999></label>')''')
+        self.page.get_by_role('button',name='Candidatura simplificada',exact=True).click()
+        pending=fill_step(self.page.get_by_role('dialog'),self.config,self.resume)
+        self.assertEqual(pending,[])
+        self.assertEqual(self.page.locator('#company').input_value(),'Não trabalho atualmente')
+        self.assertEqual(self.page.locator('#salary').input_value(),'3000')
+        self.assertEqual(fill_step(self.page.get_by_role('dialog'),self.config,self.resume,contract_regime='pj'),[])
+        self.assertEqual(self.page.locator('#salary').input_value(),'3500')
+        self.assertFalse(self.ledger.protected('123'))
+
+    def test_bilingual_numeric_salary_question(self):
+        from jobpilot import fill_step
+        self.config['salary_expectations']={'clt':2500,'pj':3500,'unspecified':3000}
+        self.page.locator('form').evaluate('''el=>el.insertAdjacentHTML('afterbegin',
+            '<label>What is your salary expectation? Only the numeric value (no currency, text, or benefits)/ Qual é a sua pretensão salarial? Apenas o valor numérico (sem moeda, texto ou benefícios).<input id=salary type=number required></label>')''')
+        self.page.get_by_role('button',name='Candidatura simplificada',exact=True).click()
+        self.assertEqual(fill_step(self.page.get_by_role('dialog'),self.config,self.resume),[])
+        self.assertEqual(self.page.locator('#salary').input_value(),'3000')
+        self.assertIsNone(self.page.evaluate('window.sends'))
+
     def test_unknown_question_even_if_prefilled_stops_send(self):
         self.page.locator("form").evaluate("el => el.insertAdjacentHTML('afterbegin','<label>Pretensão salarial<input value=5000></label>')")
         status, pending = apply(self.page, self.job, self.config, self.ledger)

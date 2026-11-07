@@ -33,7 +33,7 @@ def salary_evidence(job: Job) -> tuple[list[float], list[str], str | None]:
     """Fixed BRL salary only; never add benefits, commissions or convert periods."""
     amounts, issues = [], []
     text = '\n'.join((job.title, job.salary_text, job.description))
-    regimes = set(re.findall(r"\b(clt|pj)\b", norm(job.description + ' ' + job.salary_text)))
+    regimes = set(re.findall(r"\b(clt|pj)\b", norm(text)))
     regime = next(iter(regimes)) if len(regimes) == 1 else None
     for raw in text.splitlines():
         line = norm(raw)

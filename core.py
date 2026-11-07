@@ -106,22 +106,109 @@ def eligibility_review(job: Job, config: dict) -> str | None:
     return None
 
 
-def answer_for(label: str, config: dict) -> str | None:
-    """Only exact reviewed questions or unambiguous contact fields are filled."""
+def personal_answer(label: str, config: dict) -> str | None:
+    """Answer only identified questions from explicit, current personal facts."""
+    question = norm(label).rstrip(" *:?.")
+    employment = config.get("employment") or {}
+    if employment.get("currently_employed") is False:
+        company_pt = {
+            "empresa atual", "empregador atual", "qual sua empresa atual",
+            "qual e sua empresa atual", "em qual empresa voce trabalha atualmente",
+            "confirme o nome da empresa em que voce trabalha atualmente",
+            "confirm the name of the company where you work/ confirme o nome da empresa em que voce trabalha atualmente",
+        }
+        company_en = {"current company", "current employer", "what is your current company", "what is your current employer", "confirm the name of the company where you work"}
+        if question in company_pt:
+            return "Não trabalho atualmente"
+        if question in company_en:
+            return "Not currently employed"
+        if question in {"voce esta trabalhando atualmente", "voce trabalha atualmente", "voce esta empregado atualmente"}:
+            return "Não"
+        if question in {"are you currently employed", "are you currently working"}:
+            return "No"
+        if question == "employment status":
+            return "Unemployed"
+        if question in {"situacao profissional atual", "situacao de emprego atual"}:
+            return "Desempregado"
+    availability = config.get("availability") or {}
+    hours = availability.get("hours_per_day")
+    weekdays = set(availability.get("weekdays", []))
+    monday_to_friday = weekdays == {"monday", "tuesday", "wednesday", "thursday", "friday"}
+    if hours is not None:
+        if question in {"quantas horas por dia voce tem disponibilidade para trabalhar", "how many hours per day are you available to work"}:
+            return str(hours)
+    if hours == 8 and monday_to_friday:
+        if question in {"quantas horas por semana voce tem disponibilidade para trabalhar", "how many hours per week are you available to work"}:
+            return "40"
+        if question in {"qual sua disponibilidade de horario", "qual e sua disponibilidade de horario", "qual sua disponibilidade de dias e horarios"}:
+            return "8 horas por dia, de segunda a sexta-feira"
+        if question in {"what is your work availability", "what is your availability", "what is your working availability"}:
+            return "8 hours per day, Monday to Friday"
+        if question in {
+            "voce possui disponibilidade para trabalhar de segunda a sexta-feira",
+            "voce possui disponibilidade para trabalhar 8 horas por dia, de segunda a sexta-feira",
+            "voce possui disponibilidade para trabalhar 40 horas semanais",
+            "voce tem disponibilidade para trabalhar em periodo integral",
+        }:
+            return "Sim"
+        if question in {"are you available to work full-time", "are you available to work 40 hours per week", "can you work 8 hours per day, monday to friday"}:
+            return "Yes"
+        if question in {"quantos dias por semana voce tem disponibilidade para trabalhar", "how many days per week are you available to work"}:
+            return "5"
+        if question in {"pode trabalhar aos sabados", "voce tem disponibilidade para trabalhar aos sabados", "voce tem disponibilidade para trabalhar aos domingos", "aceita escala 12x36", "aceita atuar em escala 6x1"}:
+            return "Não"
+        if question in {"are you available to work weekends", "are you available to work on saturdays", "are you available to work on sundays"}:
+            return "No"
+    modes = set(availability.get("work_modes", []))
+    if "onsite" in modes and availability.get("onsite_city") == "Curitiba":
+        if question in {
+            "voce possui disponibilidade para atuar em modelo presencial em curitiba/pr",
+            "voce possui disponibilidade para atuar no modelo presencial em curitiba/pr",
+            "voce possui disponibilidade de trabalhar presencialmente em curitiba",
+        }:
+            return "Sim"
+    if "remote" in modes and question in {"are you available to work remotely", "are you willing to work remotely"}:
+        return "Yes"
+    if "remote" in modes and question == "voce possui disponibilidade para trabalhar remotamente":
+        return "Sim"
+    if "hybrid" in modes and question == "voce trabalharia em um modelo hibrido":
+        return "Sim"
+    if "hybrid" in modes and question == "are you willing to work in a hybrid model":
+        return "Yes"
+    return None
+
+
+def answer_for(label: str, config: dict, *, contract_regime: str | None = None) -> str | None:
+    """Fill identified questions only from explicit answers or confirmed facts."""
     key = norm(label).rstrip(" *:")
     explicit = {norm(k).rstrip(" *:"): str(v) for k, v in config.get("answers", {}).items()}
     if key in explicit:
         return explicit[key]
-    # The user may supply different monthly targets for the two Brazilian regimes.
-    # An ambiguous regime, historical salary, or different period must stay blank.
-    salary_question = re.search(r"pretens|expectativ|expected salary|salary expectation", key) and re.search(r"salar", key)
-    unsupported_period = re.search(r"ultimo|ultima|previous|last salary|anual|annual|year|hora|hour|diari|daily|liquido|\bnet\b", key)
+    # An unspecified-regime monthly target is used only when explicitly provided.
+    # It never changes advertised salary floors or authorizes period conversions.
+    salary_question = re.search(r"pretens|expectativ|expected|desired|salary expectation|compensation expectation", key) and re.search(r"salar|remuner|\bcompensation\b|\bpay\b", key)
+    # These exact parenthetical instructions concern numeric formatting, not pay
+    # inclusive of benefits. Keep all other salary-basis restrictions intact.
+    salary_basis = re.sub(r"\((?:no currency, text, or benefits|sem moeda, texto ou beneficios)\)", "", key)
+    unsupported_period = re.search(r"ultimo|ultima|previous|last salary|salario atual|current salary|anual|annual|year|hora|hour|diari|daily|semana|weekly|\bweek\b|liquid[oa]|\bnet\b|bonus|beneficio|\bbenefits?\b|comiss|equity|stock|tarefa|\btasks?\b|projeto|\bprojects?\b", salary_basis)
     if salary_question and not unsupported_period:
         clt, pj = bool(re.search(r"\bclt\b", key)), bool(re.search(r"\bpj\b", key))
         if clt != pj:
             value = config.get("salary_expectations", {}).get("clt" if clt else "pj")
-            if value is not None:
-                return str(value)
+        elif clt and pj and re.search(r"separad|respectiv|each|both", key):
+            return None
+        else:
+            value = config.get("salary_expectations", {}).get("unspecified")
+        if value is not None:
+            # Even a generic question must not quote below a known contract's floor.
+            if clt == pj and contract_regime in {"clt", "pj"}:
+                floor = config.get("minimum_monthly_salary", {}).get(contract_regime)
+                if isinstance(value, (int, float)) and isinstance(floor, (int, float)):
+                    return f"{max(value, floor):g}"
+            return str(value)
+    personal = personal_answer(label, config)
+    if personal is not None:
+        return personal
     contact = config.get("contact", {})
     fields = {
         "email": "email", "email address": "email", "endereco de email": "email", "e-mail": "email",

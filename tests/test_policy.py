@@ -46,6 +46,12 @@ class PolicyTests(unittest.TestCase):
         for regime, amount, expected in [('CLT', 2500, 'accepted'), ('PJ', 3499, 'excluded'), ('PJ', 3500, 'accepted')]:
             self.assertEqual(salary_gate(job(description=f'Salário {regime}: R$ {amount}'), CONFIG).status, expected)
 
+    def test_unspecified_form_target_does_not_lower_pj_salary_floor(self):
+        configured=CONFIG | {'salary_expectations':{'clt':2500,'pj':3500,'unspecified':3000}}
+        self.assertEqual(salary_gate(job(description='Salário PJ: R$ 3.000,00'),configured).status,'excluded')
+        self.assertEqual(salary_gate(job(description='Salário CLT: R$ 2.500,00'),configured).status,'accepted')
+        self.assertEqual(salary_gate(job(title='Desenvolvedor C# PJ',description='Salário R$ 3.000,00'),configured).status,'excluded')
+
     def test_unknown_regime_between_floors_requires_review(self):
         self.assertEqual(salary_gate(job(description='Salário R$ 3.000,00'), CONFIG).status, 'review')
         self.assertEqual(salary_gate(job(description='Salário R$ 4.000,00'), CONFIG).status, 'accepted')

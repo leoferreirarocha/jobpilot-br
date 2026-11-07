@@ -72,6 +72,54 @@ class MatchingTests(unittest.TestCase):
         config["answers"]={"Qual sua pretensão salarial CLT?":"2800"}
         self.assertEqual(answer_for("Qual sua pretensão salarial CLT?",config),"2800")
 
+    def test_explicit_unspecified_salary_target(self):
+        config={"salary_expectations":{"clt":2500,"pj":3500,"unspecified":3000}}
+        for question in ['Qual sua pretensão salarial?', 'Qual é sua expectativa de remuneração mensal?', 'Expected salary', 'What is your expected compensation?', 'Pretensão salarial CLT ou PJ']:
+            self.assertEqual(answer_for(question,config),'3000',question)
+        self.assertEqual(answer_for('Qual sua pretensão salarial CLT?',config),'2500')
+        self.assertEqual(answer_for('Qual sua pretensão salarial PJ?',config),'3500')
+        for question in ['Qual seu último salário?', 'Pretensão salarial anual', 'Expected hourly salary', 'Pretensão salarial semanal', 'Pretensão salarial líquida', 'Pretensão salarial CLT e PJ separadamente']:
+            self.assertIsNone(answer_for(question,config),question)
+
+    def test_current_unemployment_overrides_no_past_employer_assumptions(self):
+        config={'employment':{'currently_employed':False}}
+        bilingual='Confirm the name of the company where you work/ Confirme o nome da empresa em que você trabalha atualmente'
+        self.assertEqual(answer_for(bilingual,config),'Não trabalho atualmente')
+        self.assertEqual(answer_for('Current company',config),'Not currently employed')
+        self.assertEqual(answer_for('Are you currently employed?',config),'No')
+        self.assertEqual(answer_for('Você trabalha atualmente?',config),'Não')
+        for label in ['Empresa anterior', 'Previous company', 'Where did you last work?', 'Qual seu último salário?', 'Empresa']:
+            self.assertIsNone(answer_for(label,config),label)
+        self.assertIsNone(answer_for('Current company',{}))
+
+    def test_numeric_salary_format_does_not_mean_benefits_included(self):
+        config={'salary_expectations':{'clt':2500,'pj':3500,'unspecified':3000}}
+        question='What is your salary expectation? Only the numeric value (no currency, text, or benefits)/ Qual é a sua pretensão salarial? Apenas o valor numérico (sem moeda, texto ou benefícios).'
+        self.assertEqual(answer_for(question,config),'3000')
+        self.assertIsNone(answer_for(question+' Annual salary',config))
+        self.assertIsNone(answer_for('Expected salary including benefits',config))
+        self.assertIsNone(answer_for('Pretensão salarial incluindo benefícios',config))
+
+    def test_generic_salary_respects_known_pj_floor(self):
+        config={'salary_expectations':{'clt':2500,'pj':3500,'unspecified':3000},'minimum_monthly_salary':{'clt':2500,'pj':3500}}
+        self.assertEqual(answer_for('Qual sua pretensão salarial?',config),'3000')
+        self.assertEqual(answer_for('Qual sua pretensão salarial?',config,contract_regime='clt'),'3000')
+        self.assertEqual(answer_for('Qual sua pretensão salarial?',config,contract_regime='pj'),'3500')
+
+    def test_confirmed_weekday_availability(self):
+        config={'availability':{'hours_per_day':8,'weekdays':['monday','tuesday','wednesday','thursday','friday'],'work_modes':['onsite','hybrid','remote'],'onsite_city':'Curitiba'}}
+        self.assertEqual(answer_for('How many hours per day are you available to work?',config),'8')
+        self.assertEqual(answer_for('How many hours per week are you available to work?',config),'40')
+        self.assertEqual(answer_for('Qual sua disponibilidade de horário?',config),'8 horas por dia, de segunda a sexta-feira')
+        self.assertEqual(answer_for('Are you available to work full-time?',config),'Yes')
+        self.assertEqual(answer_for('Você possui disponibilidade para atuar no modelo presencial em Curitiba/PR?',config),'Sim')
+        self.assertEqual(answer_for('Você possui disponibilidade para trabalhar remotamente?',config),'Sim')
+        self.assertEqual(answer_for('Pode trabalhar aos sábados?',config),'Não')
+        self.assertEqual(answer_for('Aceita escala 12x36?',config),'Não')
+        self.assertIsNone(answer_for('Pode trabalhar aos sábados?',{}))
+        for label in ['Tem disponibilidade para início imediato?', 'Você pode trabalhar das 23h às 8h?', 'Você possui disponibilidade para atuar em São Paulo?']:
+            self.assertIsNone(answer_for(label,config),label)
+
 
 class LedgerTests(unittest.TestCase):
     def setUp(self):
